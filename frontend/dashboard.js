@@ -1,4 +1,4 @@
-const API_BASE = "https://SEU-BACKEND.onrender.com";
+const API_BASE = "https://dashboardtracker-pb4e.onrender.com";
 const endpoint = `${API_BASE}/status`;
 
 const MIN_VISIBLE_POINTS = 72;
