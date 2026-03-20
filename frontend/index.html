@@ -214,7 +214,27 @@
         <div class="config-section-title">Conexão e unidade</div>
         <div class="config-grid">
           <div class="control-box">
-            <div class="k">Atualizar SID</div>
+            <div class="k">Login Wialon</div>
+
+            <div class="cfgrow" style="margin-bottom:8px;">
+              <input id="wialonUser" type="text" placeholder="Usuário Wialon" />
+            </div>
+
+            <div class="cfgrow" style="margin-bottom:8px;">
+              <input id="wialonPassword" type="password" placeholder="Senha Wialon" />
+            </div>
+
+            <div class="cfgrow">
+              <button type="button" onclick="loginWialon()">Entrar</button>
+            </div>
+
+            <div class="small" style="margin-top:8px;">
+              Faz login na API do Wialon e captura o SID automaticamente.
+            </div>
+
+            <hr style="margin:12px 0; opacity:.2;">
+
+            <div class="k">Atualizar SID manualmente</div>
             <div class="cfgrow">
               <input id="sidInput" placeholder="Cole o novo SID aqui" />
               <button type="button" onclick="updateSid()">Enviar</button>

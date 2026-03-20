@@ -1,6 +1,6 @@
 const API_BASE = (
   window.__API_BASE__ ||
-  "https://dashboardtracker-pb4e.onrender.com"
+  window.location.origin
 ).replace(/\/$/, "");
 
 function apiUrl(path) {
