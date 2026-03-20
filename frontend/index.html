@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>Monitor Rastreasul</title>
+  <link rel="stylesheet" href="./dashboard.css" />
+</head>
+<body>
+  <main class="page-shell">
+    <header class="page-header">
+      <div class="page-header-copy">
+        <div class="page-eyebrow">Painel de telemetria</div>
+        <h1 class="page-title">Monitoramento Rastreasul</h1>
+        <div class="page-subtitle">
+          Acompanhe o status da unidade, visualize o histórico no gráfico e reproduza arquivos Excel em modo replay.
+        </div>
+      </div>
+
+      <div class="page-header-brand">
+        <img src="./logo.png" alt="Logo da empresa" class="company-logo" />
+      </div>
+    </header>
+
+    <section class="status-panel" id="statusPanel" aria-labelledby="statusPanelTitle">
+      <div class="status-top">
+        <div>
+          <div class="status-title" id="statusPanelTitle">Status do monitoramento</div>
+          <div class="small" style="margin-top:4px;">
+            Indicadores de comunicação, telemetria e atualização do snapshot.
+          </div>
+        </div>
+        <div class="status-badges" id="statusBadges" aria-live="polite"></div>
+      </div>
+
+      <div class="poll-progress-wrap" aria-hidden="true">
+        <div class="poll-progress-bar" id="pollProgressBar"></div>
+      </div>
+
+      <div class="status-grid">
+        <article class="status-item">
+          <div class="status-label">Última consulta</div>
+          <div class="status-value" id="statusConsulta">-</div>
+          <div class="status-sub">Momento em que o backend consultou a API.</div>
+        </article>
+
+        <article class="status-item">
+          <div class="status-label">Última telemetria</div>
+          <div class="status-value" id="statusTelemetria">-</div>
+          <div class="status-sub" id="statusTelemetriaSub">Sem informação</div>
+        </article>
+
+        <article class="status-item">
+          <div class="status-label">Snapshot</div>
+          <div class="status-value" id="statusSnapshot">-</div>
+          <div class="status-sub">Indica se houve leitura nova ou manutenção do snapshot.</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="replay-kpis hidden" id="replayKpisSection" aria-labelledby="replayKpisTitle">
+      <div class="status-top">
+        <div>
+          <div class="status-title" id="replayKpisTitle">Indicadores do replay</div>
+          <div class="small" style="margin-top:4px;">
+            KPIs calculados a partir do arquivo carregado no modo replay.
+          </div>
+        </div>
+      </div>
+
+      <div class="replay-kpis-grid">
+        <article class="replay-kpi replay-kpi--primary">
+          <div class="replay-kpi-label">Consumo Médio</div>
+          <div class="replay-kpi-value" id="kpiMediaCan">-</div>
+          <div class="replay-kpi-sub">Baseado em Odômetro e Consumido Raw.</div>
+        </article>
+
+        <article class="replay-kpi">
+          <div class="replay-kpi-label">Média Velocidade</div>
+          <div class="replay-kpi-value" id="kpiMediaVelocidade">-</div>
+        </article>
+
+        <article class="replay-kpi">
+          <div class="replay-kpi-label">RPM Médio</div>
+          <div class="replay-kpi-value" id="kpiRpmMedio">-</div>
+          <div class="replay-kpi-sub">Faixa verde de 1200 até 1800 RPM.</div>
+        </article>
+
+        <article class="replay-kpi">
+          <div class="replay-kpi-label">Acelerador Motorista</div>
+          <div class="replay-kpi-value" id="kpiAcelerador">-</div>
+          <div class="replay-kpi-sub">Uso excessivo acima de 50%.</div>
+        </article>
+
+        <article class="replay-kpi">
+          <div class="replay-kpi-label">Qtd. registros de frenagem</div>
+          <div class="replay-kpi-value" id="kpiFrenagens">-</div>
+          <div class="replay-kpi-sub">Acionamento do freio.</div>
+        </article>
+
+        <article class="replay-kpi">
+          <div class="replay-kpi-label">Quantidade de paradas</div>
+          <div class="replay-kpi-value" id="kpiParadas">-</div>
+          <div class="replay-kpi-sub">Paradas curtas e longas.</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="card chart-card" style="margin-top:12px;" aria-labelledby="chartSectionTitle">
+      <div class="chart-header-row">
+        <div>
+          <div class="status-title" id="chartSectionTitle">Gráfico de telemetria</div>
+          <div class="k">Passe o mouse para ver valores e clique em um ponto para comentar.</div>
+        </div>
+
+        <div class="chart-actions" aria-label="Ações do gráfico">
+          <button type="button" id="uploadDataBtn" onclick="triggerReplayUpload()">Upload Dados</button>
+          <button type="button" onclick="clearChart()">Limpar gráfico</button>
+          <button type="button" onclick="downloadData()">Download dados</button>
+        </div>
+      </div>
+
+      <input id="replayFileInput" type="file" accept=".xlsx,.xls,.csv" hidden />
+
+      <div class="chart-legend" id="chartLegend" aria-label="Legenda do gráfico"></div>
+
+      <div class="chart-layout">
+        <div class="chart-main">
+          <div id="chartWrap" aria-label="Área do gráfico">
+            <canvas id="chart"></canvas>
+            <div id="tip"></div>
+
+            <div id="commentPopover" class="comment-popover hidden" role="dialog" aria-label="Comentário do ponto">
+              <div class="comment-popover-title">Comentário do ponto</div>
+              <div class="comment-popover-time" id="commentTimeLabel">-</div>
+
+              <textarea
+                id="commentInput"
+                placeholder="Digite um comentário para este instante..."
+              ></textarea>
+
+              <div class="comment-actions">
+                <button type="button" onclick="saveComment()">Salvar</button>
+                <button type="button" onclick="removeComment()">Remover</button>
+                <button type="button" onclick="closeCommentPopover()">Fechar</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="small" id="chartMeta"></div>
+        </div>
+
+        <aside class="replay-panel" id="replayPanel" aria-labelledby="replayPanelTitle">
+          <div class="replay-title" id="replayPanelTitle">Comparativos carregados</div>
+
+          <div class="replay-block">
+            <div class="replay-label">Modo de uso</div>
+            <div class="replay-value replay-value--small">
+              Cada upload cria um novo gráfico abaixo. Use isso para comparar viagens em sequência vertical.
+            </div>
+          </div>
+
+          <div class="replay-block">
+            <div class="replay-label">Quantidade de comparativos</div>
+            <div class="replay-value" id="replayCardsCount">0</div>
+          </div>
+
+          <div class="small">
+            O gráfico principal continua disponível. Os arquivos carregados aparecem logo abaixo em cards independentes.
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="replay-compare-section" id="replayCompareSection" aria-labelledby="replayCompareTitle">
+      <div class="replay-compare-header">
+        <div>
+          <div class="status-title" id="replayCompareTitle">Comparação de arquivos</div>
+          <div class="small" style="margin-top:4px;">
+            Cada upload cria um novo gráfico abaixo para comparação visual entre viagens.
+          </div>
+        </div>
+      </div>
+
+      <div id="replayCards" class="replay-cards">
+        <div class="replay-empty-state">
+          Nenhum arquivo carregado ainda. Use <b>Upload Dados</b> para criar o primeiro comparativo.
+        </div>
+      </div>
+    </section>
+
+    <div class="toolbar">
+      <button
+        id="toggleConfigBtn"
+        class="toggle-btn"
+        onclick="toggleConfigPanel()"
+        type="button"
+        aria-expanded="false"
+      >
+        <span id="toggleConfigText">Mostrar configurações</span>
+        <span class="chevron"></span>
+      </button>
+    </div>
+
+    <section class="config-panel-wrap" id="configPanelWrap" aria-label="Painel de configurações">
+      <div class="config-panel" id="configPanel">
+        <div class="config-title">Configurações</div>
+
+        <div class="small" style="margin-top:0; margin-bottom:12px;">
+          Unidade atual (item_id): <b id="unitNow">-</b>
+        </div>
+
+        <div class="config-section-title">Conexão e unidade</div>
+        <div class="config-grid">
+          <div class="control-box">
+            <div class="k">Atualizar SID</div>
+            <div class="cfgrow">
+              <input id="sidInput" placeholder="Cole o novo SID aqui" />
+              <button type="button" onclick="updateSid()">Enviar</button>
+            </div>
+          </div>
+
+          <div class="control-box">
+            <div class="k">Unidade (por nome)</div>
+            <div class="cfgrow">
+              <select id="unitSelect" aria-label="Selecionar unidade"></select>
+              <button type="button" onclick="refreshUnits()">Atualizar lista</button>
+            </div>
+            <div class="small">Ao trocar, o monitoramento muda automaticamente.</div>
+          </div>
+        </div>
+
+        <div class="inner-config-group">
+          <button
+            type="button"
+            class="inner-toggle-btn"
+            onclick="toggleInnerConfig('scaleConfigWrap', this)"
+          >
+            Escala do gráfico
+          </button>
+          <div class="inner-config-wrap" id="scaleConfigWrap">
+            <div class="small">Deixe em branco para “Auto”.</div>
+            <div class="cfggrid" id="yConfig"></div>
+            <div class="row" style="margin-top:10px;">
+              <button type="button" onclick="applyYConfig()">Aplicar</button>
+              <button type="button" onclick="resetYConfig()">Reset</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="inner-config-group">
+          <button
+            type="button"
+            class="inner-toggle-btn"
+            onclick="toggleInnerConfig('transitManageSectionWrap', this)"
+          >
+            TransitManage
+          </button>
+          <div class="inner-config-wrap" id="transitManageSectionWrap">
+            <div id="transitManageConfig"></div>
+            <div class="row" style="margin-top:10px;">
+              <button type="button" onclick="applyTransitManageConfig()">Aplicar TransitManage</button>
+              <button type="button" onclick="resetTransitManageConfig()">Reset TransitManage</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="inner-config-group">
+          <button
+            type="button"
+            class="inner-toggle-btn"
+            onclick="toggleInnerConfig('colorConfigWrap', this)"
+          >
+            Cores das séries
+          </button>
+          <div class="inner-config-wrap" id="colorConfigWrap">
+            <div id="colorConfig"></div>
+            <div class="row" style="margin-top:10px;">
+              <button type="button" onclick="resetSeriesColors()">Reset cores</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="meta" id="meta"></footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="./js/config.js"></script>
+  <script src="./js/state.js"></script>
+  <script src="./js/formatters.js"></script>
+  <script src="./js/api.js"></script>
+  <script src="./js/chart.js"></script>
+  <script src="./js/replay.js"></script>
+  <script src="./js/ui.js"></script>
+  <script src="./js/main.js"></script>
+</body>
+</html>
