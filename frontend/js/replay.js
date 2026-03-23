@@ -131,9 +131,115 @@
     };
   }
 
+  function parseExcelSerialDate(value) {
+    if (!Number.isFinite(value)) return null;
+
+    const utcDays = Math.floor(value - 25569);
+    const utcValue = utcDays * 86400;
+    const fractionalDay = value - Math.floor(value);
+    const totalSeconds = Math.round(fractionalDay * 86400);
+
+    const date = new Date((utcValue + totalSeconds) * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function parseBrazilDateTime(value) {
+    if (value == null || value === "") return null;
+
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+
+    if (typeof value === "number") {
+      return parseExcelSerialDate(value);
+    }
+
+    let text = String(value).trim();
+    if (!text) return null;
+
+    text = text
+      .replace(/\u00A0/g, " ")
+      .replace(/^(dom|seg|ter|qua|qui|sex|s[áa]b)\.?\s+/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    let match = text.match(
+      /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+    );
+
+    if (!match) {
+      match = text.match(
+        /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+      );
+      if (!match) return null;
+
+      let [, yyyy, mm, dd, hh = "0", mi = "0", ss = "0"] = match;
+      const year = Number(yyyy);
+
+      const date = new Date(
+        year,
+        Number(mm) - 1,
+        Number(dd),
+        Number(hh),
+        Number(mi),
+        Number(ss),
+        0
+      );
+
+      if (
+        date.getFullYear() !== year ||
+        date.getMonth() !== Number(mm) - 1 ||
+        date.getDate() !== Number(dd)
+      ) {
+        return null;
+      }
+
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    let [, dd, mm, yyyy, hh = "0", mi = "0", ss = "0"] = match;
+    let year = Number(yyyy);
+
+    if (yyyy.length === 2) {
+      year += year >= 70 ? 1900 : 2000;
+    }
+
+    const date = new Date(
+      year,
+      Number(mm) - 1,
+      Number(dd),
+      Number(hh),
+      Number(mi),
+      Number(ss),
+      0
+    );
+
+    if (
+      date.getFullYear() !== year ||
+      date.getMonth() !== Number(mm) - 1 ||
+      date.getDate() !== Number(dd)
+    ) {
+      return null;
+    }
+
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
   function normalizeReplayRowFromArray(row, cols) {
     const id = getCell(row, cols.id);
-    const tmText = getCell(row, cols.tm);
+
+    let tmText = getCell(row, cols.tm);
+
+    if (tmText == null || String(tmText).trim() === "") {
+      tmText = getCell(row, cols.agrupamento);
+    }
+    if (tmText == null || String(tmText).trim() === "") {
+      tmText = row[2];
+    }
+    if (tmText == null || String(tmText).trim() === "") {
+      tmText = row[1];
+    }
+
     const dt = parseBrazilDateTime(tmText);
     const msgTm = dt ? Math.floor(dt.getTime() / 1000) : null;
 
@@ -171,7 +277,7 @@
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",
-      raw: false,
+      raw: true,
     });
 
     if (!rows.length) throw new Error("Arquivo sem linhas de dados.");
@@ -191,10 +297,34 @@
 
     const headerRow = nonEmptyRows[headerRowIndex];
     const headerIndexMap = buildHeaderIndexMap(headerRow);
-    const cols = resolveImportCols(headerIndexMap);
+    const cols = resolveImportCols(headerIndexMap) || {};
+
+    const normalizedHeaders = headerRow.map((h) =>
+      String(h ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\*/g, "")
+        .trim()
+        .toLowerCase()
+    );
+
+    if (cols.id == null) {
+      const idx = normalizedHeaders.findIndex((h) => h === "nº" || h === "no" || h === "n" || h === "numero");
+      if (idx >= 0) cols.id = idx;
+      else cols.id = 0;
+    }
 
     if (cols.tm == null) {
-      throw new Error("A coluna 'Hora' é obrigatória para o replay.");
+      let idx = normalizedHeaders.findIndex((h) => h === "hora");
+      if (idx < 0) idx = normalizedHeaders.findIndex((h) => h.includes("hora"));
+      if (idx < 0) idx = 2;
+      cols.tm = idx;
+    }
+
+    if (cols.agrupamento == null) {
+      let idx = normalizedHeaders.findIndex((h) => h === "agrupamento");
+      if (idx < 0) idx = 1;
+      cols.agrupamento = idx;
     }
 
     const dataRows = nonEmptyRows.slice(headerRowIndex + 1);
