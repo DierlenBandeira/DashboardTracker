@@ -427,6 +427,7 @@
           <button type="button" data-action="pause">Pause</button>
           <button type="button" data-action="show-all">Mostrar tudo</button>
           <button type="button" data-action="remove">Remover</button>
+          <button type="button" data-action="download" onclick="window.downloadData()">Download</button>
         </div>
       </div>
 
