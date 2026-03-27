@@ -311,19 +311,41 @@ def resolve_static_path(request_path: str) -> Path | None:
     if raw_path in ("", "/"):
         return HTML_PATH
 
+    frontend_root = FRONTEND_DIR.resolve()
     relative = raw_path.lstrip("/")
+
+    if not relative:
+        return HTML_PATH
+
     candidate = (FRONTEND_DIR / relative).resolve()
 
     try:
-        candidate.relative_to(FRONTEND_DIR.resolve())
+        candidate.relative_to(frontend_root)
     except ValueError:
         return None
 
-    if candidate.is_dir():
-        index_candidate = candidate / "index.html"
-        return index_candidate if index_candidate.exists() else None
+    if candidate.is_file():
+        return candidate
 
-    return candidate
+    if candidate.is_dir():
+        index_candidate = (candidate / "index.html").resolve()
+        try:
+            index_candidate.relative_to(frontend_root)
+        except ValueError:
+            return None
+        if index_candidate.exists() and index_candidate.is_file():
+            return index_candidate
+
+    html_candidate = (FRONTEND_DIR / f"{relative}.html").resolve()
+    try:
+        html_candidate.relative_to(frontend_root)
+    except ValueError:
+        return None
+
+    if html_candidate.exists() and html_candidate.is_file():
+        return html_candidate
+
+    return None
 
 
 def get_allowed_origin(request_handler) -> str:
