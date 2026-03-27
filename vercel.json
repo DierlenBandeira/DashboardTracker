@@ -8,6 +8,10 @@
       "destination": "https://dashboardtracker-pb4e.onrender.com/:path*"
     },
     {
+      "source": "/calc_dist",
+      "destination": "/calc_dist.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
