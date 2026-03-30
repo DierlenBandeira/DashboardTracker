@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tratamento de Dados</title>
+  <link rel="stylesheet" href="/dashboard.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+</head>
+<body class="treatment-page">
+  <div id="sidebar-root"></div>
+
+  <div class="page-shell with-sidebar">
+    <header class="page-header">
+      <div class="page-header-copy">
+        <span class="page-eyebrow">Tratamento de dados</span>
+        <h1 class="page-title">Padronização de dados</h1>
+        <div class="page-subtitle">
+          Carregue um arquivo Excel, visualize a tabela tratada e exporte uma nova versão.
+        </div>
+      </div>
+
+      <div class="page-header-brand">
+        <div class="badge badge-warn">
+          <span class="badge-dot"></span>
+          Primeira versão
+        </div>
+      </div>
+    </header>
+
+    <section class="card treatment-upload-card">
+      <div class="chart-header-row">
+        <div>
+          <div class="config-title">Arquivo</div>
+          <div class="small">Nesta primeira versão já existe upload, tratamento básico, preview e export.</div>
+        </div>
+
+        <div class="chart-actions treatment-actions">
+          <button type="button" id="btnSelectFile">Carregar arquivo</button>
+          <button type="button" id="btnExportFile" disabled>Exportar tratado</button>
+          <button type="button" id="btnClearFile" disabled>Limpar</button>
+        </div>
+      </div>
+
+      <div class="treatment-dropzone">
+        <div class="treatment-dropzone-title">Upload de arquivo Excel</div>
+        <div class="treatment-dropzone-subtitle">
+          Envie um arquivo <span class="treatment-highlight">.xlsx, .xls ou .csv</span>,
+          visualize a tabela e exporte a versão tratada.
+        </div>
+        <div class="treatment-status-note">
+          O arquivo final será baixado com o nome original + <span class="treatment-meta-strong">_tratado</span>.
+        </div>
+      </div>
+
+      <input
+        id="treatmentFileInput"
+        type="file"
+        accept=".xlsx,.xls"
+        class="hidden"
+      />
+
+      <div class="status-panel">
+        <div class="status-top">
+          <div class="status-title">Resumo do tratamento</div>
+          <div class="status-badges">
+            <div class="badge badge-warn" id="statusBadge">
+              <span class="badge-dot"></span>
+              Aguardando arquivo
+            </div>
+          </div>
+        </div>
+
+        <div class="status-grid">
+          <div class="status-item">
+            <div class="status-label">Arquivo</div>
+            <div class="status-value" id="fileNameValue">-</div>
+            <div class="status-sub">Nome do arquivo carregado.</div>
+          </div>
+
+          <div class="status-item">
+            <div class="status-label">Linhas</div>
+            <div class="status-value" id="rowCountValue">0</div>
+            <div class="status-sub">Quantidade de linhas válidas após leitura.</div>
+          </div>
+
+          <div class="status-item">
+            <div class="status-label">Colunas</div>
+            <div class="status-value" id="columnCountValue">0</div>
+            <div class="status-sub">Total de colunas exportadas no arquivo tratado.</div>
+          </div>
+        </div>
+
+        <div class="meta" id="treatmentMeta">
+          Nenhum arquivo processado.
+        </div>
+      </div>
+    </section>
+
+    <section class="card treatment-preview-card" style="margin-top: 14px;">
+      <div class="chart-header-row">
+        <div>
+          <div class="config-title">Pré-visualização</div>
+          <div class="small treatment-preview-info" id="previewInfo">
+            A tabela aparecerá aqui depois do upload.
+          </div>
+        </div>
+      </div>
+
+        <div class="table-card treatment-table-card">
+        <div class="treatment-top-scroll" id="treatmentTopScroll">
+            <div class="treatment-top-scroll-inner" id="treatmentTopScrollInner"></div>
+        </div>
+
+        <div class="treatment-table-wrap" id="treatmentTableWrap">
+            <table class="data-table" id="previewTable">
+            <thead id="previewHead">
+                <tr>
+                <th>Tabela vazia</th>
+                </tr>
+            </thead>
+            <tbody id="previewBody">
+                <tr>
+                <td class="table-empty">Carregue um arquivo para visualizar os dados tratados.</td>
+                </tr>
+            </tbody>
+            </table>
+        </div>
+        </div>
+    </section>
+  </div>
+
+  <script src="/js/sidebar.js"></script>
+  <script src="/js/treatment.js"></script>
+</body>
+</html>

@@ -12,6 +12,10 @@
       "destination": "/calc_dist.html"
     },
     {
+      "source": "/treatment",
+      "destination": "/treatment.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
