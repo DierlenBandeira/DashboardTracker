@@ -3,7 +3,7 @@ async function loadSidebar() {
   if (!root) return;
 
   try {
-    const response = await fetch('/components/sidebar.html');
+    const response = await fetch('/components/sidebar');
     if (!response.ok) throw new Error('Não foi possível carregar o menu lateral');
 
     root.innerHTML = await response.text();
