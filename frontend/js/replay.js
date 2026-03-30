@@ -159,7 +159,7 @@
 
     text = text
       .replace(/\u00A0/g, " ")
-      .replace(/^(dom|seg|ter|qua|qui|sex|s[áa]b)\.?\s+/i, "")
+      .replace(/^(dom|seg|ter|qua|qui|quin|quinta|sex|s[áa]b)\.?\s+/i, "")
       .replace(/\s+/g, " ")
       .trim();
 
@@ -173,7 +173,7 @@
       );
       if (!match) return null;
 
-      let [, yyyy, mm, dd, hh = "0", mi = "0", ss = "0"] = match;
+      const [, yyyy, mm, dd, hh = "0", mi = "0", ss = "0"] = match;
       const year = Number(yyyy);
 
       const date = new Date(
@@ -270,10 +270,13 @@
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
 
-    const firstSheetName = workbook.SheetNames[0];
-    if (!firstSheetName) throw new Error("Arquivo sem planilhas.");
+    const sheetName = workbook.SheetNames.includes("Mensagens")
+      ? "Mensagens"
+      : workbook.SheetNames[0];
 
-    const sheet = workbook.Sheets[firstSheetName];
+    if (!sheetName) throw new Error("Arquivo sem planilhas.");
+
+    const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",

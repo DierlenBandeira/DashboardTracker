@@ -1,0 +1,161 @@
+<details class="card treatment-configs-accordion">
+  <summary class="treatment-configs-summary">
+    <div>
+      <div class="config-title">Parâmetros operacionais</div>
+      <div class="small">
+        Configure os limites usados nas classificações e cálculos do tratamento.
+      </div>
+    </div>
+
+    <span class="treatment-configs-summary-right">
+      <span class="treatment-configs-chip">Clique para expandir</span>
+      <span class="treatment-configs-chevron"></span>
+    </span>
+  </summary>
+
+  <div class="treatment-configs-content">
+    <div class="treatment-params-grid">
+      <section class="treatment-param-group">
+        <div class="treatment-param-group-title">Trânsito (Velocidade)</div>
+
+        <div class="treatment-param-row">
+          <label for="speedLowMax">Velocidade Baixa</label>
+          <div class="treatment-param-inline">
+            <span class="treatment-param-text">Abaixo de</span>
+            <input type="number" id="speedLowMax" value="10" step="0.01" />
+            <span class="treatment-param-unit">km/h</span>
+          </div>
+        </div>
+
+        <div class="treatment-param-row">
+          <label for="speedMediumMax">Velocidade Média</label>
+          <div class="treatment-param-inline">
+            <span class="treatment-param-text">Até</span>
+            <input type="number" id="speedMediumMax" value="15" step="0.01" />
+            <span class="treatment-param-unit">km/h</span>
+          </div>
+        </div>
+
+        <div class="treatment-param-row">
+          <label for="speedHighMin">Velocidade Alta</label>
+          <div class="treatment-param-inline">
+            <span class="treatment-param-text">Acima de</span>
+            <input type="number" id="speedHighMin" value="15" step="0.01" />
+            <span class="treatment-param-unit">km/h</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="treatment-param-group">
+        <div class="treatment-param-group-title">Trânsito (RPM)</div>
+
+        <div class="treatment-param-row">
+          <label for="rpmIntenseLow">RPM Intenso</label>
+          <div class="treatment-param-inline treatment-param-inline-double">
+            <input type="number" id="rpmIntenseLow" value="900" step="1" />
+            <span class="treatment-param-text">ou</span>
+            <input type="number" id="rpmIntenseHigh" value="1900" step="1" />
+            <span class="treatment-param-text">(fora da faixa)</span>
+          </div>
+        </div>
+
+        <div class="treatment-param-row">
+          <label for="rpmMediumMin">RPM Médio</label>
+          <div class="treatment-param-inline treatment-param-inline-double">
+            <span class="treatment-param-text">Entre</span>
+            <input type="number" id="rpmMediumMin" value="900" step="1" />
+            <span class="treatment-param-text">e</span>
+            <input type="number" id="rpmMediumMax" value="1099" step="1" />
+          </div>
+        </div>
+
+        <div class="treatment-param-row">
+          <label for="rpmLightMin">RPM Leve</label>
+          <div class="treatment-param-inline treatment-param-inline-double">
+            <span class="treatment-param-text">Entre</span>
+            <input type="number" id="rpmLightMin" value="1100" step="1" />
+            <span class="treatment-param-text">e</span>
+            <input type="number" id="rpmLightMax" value="1900" step="1" />
+          </div>
+        </div>
+      </section>
+
+      <section class="treatment-param-group">
+        <div class="treatment-param-group-title">Frenagens</div>
+
+        <div class="treatment-param-row">
+          <label for="brakeIntenseMin">Intensa p/min</label>
+          <div class="treatment-param-inline">
+            <span class="treatment-param-text">≥</span>
+            <input type="number" id="brakeIntenseMin" value="4" step="0.01" />
+          </div>
+        </div>
+
+        <div class="treatment-param-row">
+          <label for="brakeMediumMin">Média p/min</label>
+          <div class="treatment-param-inline treatment-param-inline-double">
+            <span class="treatment-param-text">Entre</span>
+            <input type="number" id="brakeMediumMin" value="2" step="0.01" />
+            <span class="treatment-param-text">e</span>
+            <input type="number" id="brakeMediumMax" value="3.99" step="0.01" />
+          </div>
+        </div>
+
+        <div class="treatment-param-row">
+          <label for="brakeLightMax">Leve p/min</label>
+          <div class="treatment-param-inline">
+            <span class="treatment-param-text">≤</span>
+            <input type="number" id="brakeLightMax" value="1.99" step="0.01" />
+          </div>
+        </div>
+      </section>
+
+      <section class="treatment-param-group">
+        <div class="treatment-param-group-title">Aceleração (Faixas de Acionamento)</div>
+
+        <div class="treatment-param-row">
+          <label for="accelIntenseMin">Intensa p/min</label>
+          <div class="treatment-param-inline">
+            <span class="treatment-param-text">≥</span>
+            <input type="number" id="accelIntenseMin" value="60.01" step="0.01" />
+            <span class="treatment-param-unit">%</span>
+          </div>
+        </div>
+
+        <div class="treatment-param-row">
+          <label for="accelMediumMin">Média p/min</label>
+          <div class="treatment-param-inline treatment-param-inline-double">
+            <span class="treatment-param-text">Entre</span>
+            <input type="number" id="accelMediumMin" value="30.00" step="0.01" />
+            <span class="treatment-param-text">e</span>
+            <input type="number" id="accelMediumMax" value="60" step="0.01" />
+            <span class="treatment-param-unit">%</span>
+          </div>
+        </div>
+
+        <div class="treatment-param-row">
+          <label for="accelLightMax">Leve p/min</label>
+          <div class="treatment-param-inline">
+            <span class="treatment-param-text">≤</span>
+            <input type="number" id="accelLightMax" value="30" step="0.01" />
+            <span class="treatment-param-unit">%</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="treatment-param-group">
+        <div class="treatment-param-group-title">Melhor faixa de RPM</div>
+
+        <div class="treatment-param-row">
+          <label for="bestRpmMin">Faixa ideal</label>
+          <div class="treatment-param-inline treatment-param-inline-double">
+            <span class="treatment-param-text">Entre</span>
+            <input type="number" id="bestRpmMin" value="1100" step="1" />
+            <span class="treatment-param-text">e</span>
+            <input type="number" id="bestRpmMax" value="1900" step="1" />
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</details>

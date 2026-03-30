@@ -104,6 +104,22 @@
       .toLowerCase();
   }
 
+  async function loadTreatmentConfigs() {
+    const root = document.getElementById('treatment-configs-root');
+    if (!root) return;
+
+    try {
+      const response = await fetch('/components/treatment/configs', { cache: 'no-store' });
+      if (!response.ok) {
+        throw new Error('Não foi possível carregar os parâmetros do treatment');
+      }
+
+      root.innerHTML = await response.text();
+    } catch (error) {
+      console.error('Erro ao carregar configs do treatment:', error);
+    }
+  }
+
   function makeUniqueHeaders(headers) {
     const seen = new Map();
 
@@ -651,7 +667,12 @@
     return;
   }
 
-  bindEvents();
-  resetState();
-  syncTopScrollbar();
+  async function init() {
+    await loadTreatmentConfigs();
+    bindEvents();
+    resetState();
+    syncTopScrollbar();
+  }
+
+  init();
 })();
