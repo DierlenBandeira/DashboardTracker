@@ -84,6 +84,493 @@
     topScrollInner: document.getElementById("treatmentTopScrollInner")
   };
 
+  function initSpeedThresholdUX() {
+    const lowInput = document.getElementById("speedLowMax");
+    const mediumInput = document.getElementById("speedMediumMax");
+    const highHidden = document.getElementById("speedHighMin");
+
+    const lowPreview = document.getElementById("speedLowPreview");
+    const mediumFromPreview = document.getElementById("speedMediumFromPreview");
+    const mediumToPreview = document.getElementById("speedMediumToPreview");
+    const highPreview = document.getElementById("speedHighPreview");
+    const highLegendPreview = document.getElementById("speedHighLegendPreview");
+
+    const segLow = document.getElementById("speedSegLow");
+    const segMedium = document.getElementById("speedSegMedium");
+    const segHigh = document.getElementById("speedSegHigh");
+
+    const slider = document.getElementById("speedRangeSlider");
+    const lowHandle = document.getElementById("speedLowHandle");
+    const mediumHandle = document.getElementById("speedMediumHandle");
+
+    if (
+      !lowInput || !mediumInput || !highHidden ||
+      !lowPreview || !mediumFromPreview || !mediumToPreview ||
+      !highPreview || !highLegendPreview ||
+      !segLow || !segMedium || !segHigh ||
+      !slider || !lowHandle || !mediumHandle
+    ) return;
+
+    const SCALE_MIN = 0;
+    const SCALE_MAX = 30;
+    const STEP = 0.1;
+    const MIN_GAP = STEP;
+    let activeHandle = null;
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    function snap(value) {
+      return Math.round(value / STEP) * STEP;
+    }
+
+    function formatValue(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return "0";
+      return Number.isInteger(num) ? String(num) : num.toFixed(1);
+    }
+
+    function valueToPercent(value) {
+      return ((value - SCALE_MIN) / (SCALE_MAX - SCALE_MIN)) * 100;
+    }
+
+    function clientXToValue(clientX) {
+      const rect = slider.getBoundingClientRect();
+      const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
+      return snap(SCALE_MIN + ratio * (SCALE_MAX - SCALE_MIN));
+    }
+
+    function applyValues(low, medium, source) {
+      low = snap(clamp(low, SCALE_MIN, SCALE_MAX - MIN_GAP));
+      medium = snap(clamp(medium, SCALE_MIN + MIN_GAP, SCALE_MAX));
+
+      if (medium - low < MIN_GAP) {
+        if (source === "low") {
+          low = medium - MIN_GAP;
+        } else {
+          medium = low + MIN_GAP;
+        }
+      }
+
+      low = clamp(low, SCALE_MIN, SCALE_MAX - MIN_GAP);
+      medium = clamp(medium, SCALE_MIN + MIN_GAP, SCALE_MAX);
+
+      lowInput.value = formatValue(low);
+      mediumInput.value = formatValue(medium);
+      highHidden.value = formatValue(medium);
+
+      lowPreview.textContent = formatValue(low);
+      mediumFromPreview.textContent = formatValue(low);
+      mediumToPreview.textContent = formatValue(medium);
+      highPreview.textContent = formatValue(medium);
+      highLegendPreview.textContent = formatValue(medium);
+
+      const lowPct = valueToPercent(low);
+      const mediumPct = valueToPercent(medium);
+
+      segLow.style.left = "0%";
+      segLow.style.width = `${lowPct}%`;
+
+      segMedium.style.left = `${lowPct}%`;
+      segMedium.style.width = `${Math.max(mediumPct - lowPct, 0)}%`;
+
+      segHigh.style.left = `${mediumPct}%`;
+      segHigh.style.width = `${Math.max(100 - mediumPct, 0)}%`;
+
+      lowHandle.style.left = `${lowPct}%`;
+      mediumHandle.style.left = `${mediumPct}%`;
+    }
+
+    function syncFromInputs(source) {
+      const low = Number(lowInput.value || SCALE_MIN);
+      const medium = Number(mediumInput.value || SCALE_MAX);
+      applyValues(low, medium, source);
+    }
+
+    function onDrag(clientX) {
+      if (!activeHandle) return;
+
+      const draggedValue = clientXToValue(clientX);
+      const currentLow = Number(lowInput.value || SCALE_MIN);
+      const currentMedium = Number(mediumInput.value || SCALE_MAX);
+
+      if (activeHandle === "low") {
+        applyValues(draggedValue, currentMedium, "low");
+      } else {
+        applyValues(currentLow, draggedValue, "medium");
+      }
+    }
+
+    function onPointerMove(event) {
+      onDrag(event.clientX);
+    }
+
+    function onPointerUp() {
+      activeHandle = null;
+      lowHandle.classList.remove("is-active");
+      mediumHandle.classList.remove("is-active");
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+    }
+
+    function startDrag(which, clientX) {
+      activeHandle = which;
+      lowHandle.classList.toggle("is-active", which === "low");
+      mediumHandle.classList.toggle("is-active", which === "medium");
+      onDrag(clientX);
+      document.addEventListener("pointermove", onPointerMove);
+      document.addEventListener("pointerup", onPointerUp);
+    }
+
+    lowHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("low", event.clientX);
+    });
+
+    mediumHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("medium", event.clientX);
+    });
+
+    slider.addEventListener("pointerdown", (event) => {
+      if (event.target === lowHandle || event.target === mediumHandle) return;
+
+      const clickedValue = clientXToValue(event.clientX);
+      const currentLow = Number(lowInput.value || SCALE_MIN);
+      const currentMedium = Number(mediumInput.value || SCALE_MAX);
+
+      const closest =
+        Math.abs(clickedValue - currentLow) <= Math.abs(clickedValue - currentMedium)
+          ? "low"
+          : "medium";
+
+      startDrag(closest, event.clientX);
+    });
+
+    lowInput.addEventListener("input", () => syncFromInputs("low"));
+    mediumInput.addEventListener("input", () => syncFromInputs("medium"));
+    lowInput.addEventListener("blur", () => syncFromInputs("low"));
+    mediumInput.addEventListener("blur", () => syncFromInputs("medium"));
+
+    lowHandle.addEventListener("keydown", (event) => {
+      const currentLow = Number(lowInput.value || SCALE_MIN);
+      const currentMedium = Number(mediumInput.value || SCALE_MAX);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applyValues(currentLow - STEP, currentMedium, "low");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        applyValues(currentLow + STEP, currentMedium, "low");
+      }
+    });
+
+    mediumHandle.addEventListener("keydown", (event) => {
+      const currentLow = Number(lowInput.value || SCALE_MIN);
+      const currentMedium = Number(mediumInput.value || SCALE_MAX);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applyValues(currentLow, currentMedium - STEP, "medium");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        applyValues(currentLow, currentMedium + STEP, "medium");
+      }
+    });
+
+    applyValues(
+      Number(lowInput.value || 10),
+      Number(mediumInput.value || 15),
+      "medium"
+    );
+  }
+
+  function initTransitRpmUX() {
+    const usefulStartInput = document.getElementById("rpmIntenseLow");
+    const lightStartInput = document.getElementById("rpmLightMin");
+    const usefulEndInput = document.getElementById("rpmLightMax");
+
+    const intenseHighHidden = document.getElementById("rpmIntenseHigh");
+    const mediumMinHidden = document.getElementById("rpmMediumMin");
+    const mediumMaxHidden = document.getElementById("rpmMediumMax");
+
+    const intenseLowPreview = document.getElementById("rpmIntenseLowPreview");
+    const intenseHighPreview = document.getElementById("rpmIntenseHighPreview");
+    const mediumMinPreview = document.getElementById("rpmMediumMinPreview");
+    const mediumMaxPreview = document.getElementById("rpmMediumMaxPreview");
+    const lightMinPreview = document.getElementById("rpmLightMinPreview");
+    const lightMaxPreview = document.getElementById("rpmLightMaxPreview");
+
+    const slider = document.getElementById("rpmTransitSlider");
+    const handleStart = document.getElementById("rpmTransitHandleStart");
+    const handleMiddle = document.getElementById("rpmTransitHandleMiddle");
+    const handleEnd = document.getElementById("rpmTransitHandleEnd");
+
+    const segIntenseLow = document.getElementById("rpmTransitSegIntenseLow");
+    const segMedium = document.getElementById("rpmTransitSegMedium");
+    const segLight = document.getElementById("rpmTransitSegLight");
+    const segIntenseHigh = document.getElementById("rpmTransitSegIntenseHigh");
+
+    if (
+      !usefulStartInput || !lightStartInput || !usefulEndInput ||
+      !intenseHighHidden || !mediumMinHidden || !mediumMaxHidden ||
+      !intenseLowPreview || !intenseHighPreview ||
+      !mediumMinPreview || !mediumMaxPreview ||
+      !lightMinPreview || !lightMaxPreview ||
+      !slider || !handleStart || !handleMiddle || !handleEnd ||
+      !segIntenseLow || !segMedium || !segLight || !segIntenseHigh
+    ) return;
+
+    const SCALE_MIN = 0;
+    const SCALE_MAX = 3000;
+    const STEP = 1;
+    const MIN_GAP = 1;
+
+    let activeHandle = null;
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    function snap(value) {
+      return Math.round(value / STEP) * STEP;
+    }
+
+    function formatValue(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return "0";
+      return String(Math.round(num));
+    }
+
+    function valueToPercent(value) {
+      return ((value - SCALE_MIN) / (SCALE_MAX - SCALE_MIN)) * 100;
+    }
+
+    function clientXToValue(clientX) {
+      const rect = slider.getBoundingClientRect();
+      const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
+      return snap(SCALE_MIN + ratio * (SCALE_MAX - SCALE_MIN));
+    }
+
+    function applyValues(usefulStart, lightStart, usefulEnd, source) {
+      usefulStart = snap(clamp(usefulStart, SCALE_MIN, SCALE_MAX - (MIN_GAP * 2)));
+      lightStart = snap(clamp(lightStart, SCALE_MIN + MIN_GAP, SCALE_MAX - MIN_GAP));
+      usefulEnd = snap(clamp(usefulEnd, SCALE_MIN + (MIN_GAP * 2), SCALE_MAX));
+
+      if (lightStart - usefulStart < MIN_GAP) {
+        if (source === "start") {
+          usefulStart = lightStart - MIN_GAP;
+        } else {
+          lightStart = usefulStart + MIN_GAP;
+        }
+      }
+
+      if (usefulEnd - lightStart < MIN_GAP) {
+        if (source === "end") {
+          usefulEnd = lightStart + MIN_GAP;
+        } else {
+          lightStart = usefulEnd - MIN_GAP;
+        }
+      }
+
+      usefulStart = snap(clamp(usefulStart, SCALE_MIN, SCALE_MAX - (MIN_GAP * 2)));
+      lightStart = snap(clamp(lightStart, usefulStart + MIN_GAP, SCALE_MAX - MIN_GAP));
+      usefulEnd = snap(clamp(usefulEnd, lightStart + MIN_GAP, SCALE_MAX));
+
+      const mediumMin = usefulStart;
+      const mediumMax = lightStart - 1;
+      const lightMin = lightStart;
+      const lightMax = usefulEnd;
+      const intenseLow = usefulStart;
+      const intenseHigh = usefulEnd;
+
+      usefulStartInput.value = formatValue(usefulStart);
+      lightStartInput.value = formatValue(lightStart);
+      usefulEndInput.value = formatValue(usefulEnd);
+
+      mediumMinHidden.value = formatValue(mediumMin);
+      mediumMaxHidden.value = formatValue(mediumMax);
+      intenseHighHidden.value = formatValue(intenseHigh);
+
+      intenseLowPreview.textContent = formatValue(intenseLow);
+      intenseHighPreview.textContent = formatValue(intenseHigh);
+      mediumMinPreview.textContent = formatValue(mediumMin);
+      mediumMaxPreview.textContent = formatValue(mediumMax);
+      lightMinPreview.textContent = formatValue(lightMin);
+      lightMaxPreview.textContent = formatValue(lightMax);
+
+      const startPct = valueToPercent(usefulStart);
+      const middlePct = valueToPercent(lightStart);
+      const endPct = valueToPercent(usefulEnd);
+
+      segIntenseLow.style.left = "0%";
+      segIntenseLow.style.width = `${startPct}%`;
+
+      segMedium.style.left = `${startPct}%`;
+      segMedium.style.width = `${Math.max(middlePct - startPct, 0)}%`;
+
+      segLight.style.left = `${middlePct}%`;
+      segLight.style.width = `${Math.max(endPct - middlePct, 0)}%`;
+
+      segIntenseHigh.style.left = `${endPct}%`;
+      segIntenseHigh.style.width = `${Math.max(100 - endPct, 0)}%`;
+
+      handleStart.style.left = `${startPct}%`;
+      handleMiddle.style.left = `${middlePct}%`;
+      handleEnd.style.left = `${endPct}%`;
+    }
+
+    function syncFromInputs(source) {
+      const usefulStart = Number(usefulStartInput.value || 900);
+      const lightStart = Number(lightStartInput.value || 1100);
+      const usefulEnd = Number(usefulEndInput.value || 1900);
+      applyValues(usefulStart, lightStart, usefulEnd, source);
+    }
+
+    function onDrag(clientX) {
+      if (!activeHandle) return;
+
+      const draggedValue = clientXToValue(clientX);
+
+      const usefulStart = Number(usefulStartInput.value || 900);
+      const lightStart = Number(lightStartInput.value || 1100);
+      const usefulEnd = Number(usefulEndInput.value || 1900);
+
+      if (activeHandle === "start") {
+        applyValues(draggedValue, lightStart, usefulEnd, "start");
+      } else if (activeHandle === "middle") {
+        applyValues(usefulStart, draggedValue, usefulEnd, "middle");
+      } else {
+        applyValues(usefulStart, lightStart, draggedValue, "end");
+      }
+    }
+
+    function onPointerMove(event) {
+      onDrag(event.clientX);
+    }
+
+    function onPointerUp() {
+      activeHandle = null;
+      handleStart.classList.remove("is-active");
+      handleMiddle.classList.remove("is-active");
+      handleEnd.classList.remove("is-active");
+
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+    }
+
+    function startDrag(which, clientX) {
+      activeHandle = which;
+      handleStart.classList.toggle("is-active", which === "start");
+      handleMiddle.classList.toggle("is-active", which === "middle");
+      handleEnd.classList.toggle("is-active", which === "end");
+
+      onDrag(clientX);
+
+      document.addEventListener("pointermove", onPointerMove);
+      document.addEventListener("pointerup", onPointerUp);
+    }
+
+    handleStart.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("start", event.clientX);
+    });
+
+    handleMiddle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("middle", event.clientX);
+    });
+
+    handleEnd.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("end", event.clientX);
+    });
+
+    slider.addEventListener("pointerdown", (event) => {
+      if (
+        event.target === handleStart ||
+        event.target === handleMiddle ||
+        event.target === handleEnd
+      ) return;
+
+      const clickedValue = clientXToValue(event.clientX);
+      const usefulStart = Number(usefulStartInput.value || 900);
+      const lightStart = Number(lightStartInput.value || 1100);
+      const usefulEnd = Number(usefulEndInput.value || 1900);
+
+      const distances = [
+        { key: "start", distance: Math.abs(clickedValue - usefulStart) },
+        { key: "middle", distance: Math.abs(clickedValue - lightStart) },
+        { key: "end", distance: Math.abs(clickedValue - usefulEnd) }
+      ].sort((a, b) => a.distance - b.distance);
+
+      startDrag(distances[0].key, event.clientX);
+    });
+
+    usefulStartInput.addEventListener("input", () => syncFromInputs("start"));
+    lightStartInput.addEventListener("input", () => syncFromInputs("middle"));
+    usefulEndInput.addEventListener("input", () => syncFromInputs("end"));
+
+    usefulStartInput.addEventListener("blur", () => syncFromInputs("start"));
+    lightStartInput.addEventListener("blur", () => syncFromInputs("middle"));
+    usefulEndInput.addEventListener("blur", () => syncFromInputs("end"));
+
+    handleStart.addEventListener("keydown", (event) => {
+      const usefulStart = Number(usefulStartInput.value || 900);
+      const lightStart = Number(lightStartInput.value || 1100);
+      const usefulEnd = Number(usefulEndInput.value || 1900);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applyValues(usefulStart - STEP, lightStart, usefulEnd, "start");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        applyValues(usefulStart + STEP, lightStart, usefulEnd, "start");
+      }
+    });
+
+    handleMiddle.addEventListener("keydown", (event) => {
+      const usefulStart = Number(usefulStartInput.value || 900);
+      const lightStart = Number(lightStartInput.value || 1100);
+      const usefulEnd = Number(usefulEndInput.value || 1900);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applyValues(usefulStart, lightStart - STEP, usefulEnd, "middle");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        applyValues(usefulStart, lightStart + STEP, usefulEnd, "middle");
+      }
+    });
+
+    handleEnd.addEventListener("keydown", (event) => {
+      const usefulStart = Number(usefulStartInput.value || 900);
+      const lightStart = Number(lightStartInput.value || 1100);
+      const usefulEnd = Number(usefulEndInput.value || 1900);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applyValues(usefulStart, lightStart, usefulEnd - STEP, "end");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        applyValues(usefulStart, lightStart, usefulEnd + STEP, "end");
+      }
+    });
+
+    applyValues(
+      Number(usefulStartInput.value || 900),
+      Number(lightStartInput.value || 1100),
+      Number(usefulEndInput.value || 1900),
+      "middle"
+    );
+  }
+
   function normalizeSpaces(value) {
     return String(value ?? "")
       .replace(/\u00A0/g, " ")
@@ -104,19 +591,233 @@
       .toLowerCase();
   }
 
+  function initTreatmentConfigUI() {
+    initSpeedThresholdUX();
+    initTransitRpmUX();
+    initBestRpmRange();
+  }
+
+  function initBestRpmRange() {
+    const minInput = document.getElementById("bestRpmMin");
+    const maxInput = document.getElementById("bestRpmMax");
+    const minRange = document.getElementById("bestRpmMinRange");
+    const maxRange = document.getElementById("bestRpmMaxRange");
+    const fill = document.getElementById("bestRpmTrackFill");
+    const sliderWrap = document.querySelector(".rpm-range-slider-wrap");
+
+    if (!minInput || !maxInput || !minRange || !maxRange || !fill || !sliderWrap) return;
+
+    const RANGE_MIN = Number(minRange.min || 0);
+    const RANGE_MAX = Number(maxRange.max || 3000);
+    const STEP = Number(minRange.step || 50);
+    const MIN_GAP = STEP;
+
+    let activeThumb = null;
+
+    let minHandle = sliderWrap.querySelector(".rpm-range-handle--min");
+    let maxHandle = sliderWrap.querySelector(".rpm-range-handle--max");
+
+    if (!minHandle) {
+      minHandle = document.createElement("button");
+      minHandle.type = "button";
+      minHandle.className = "rpm-range-handle rpm-range-handle--min";
+      minHandle.setAttribute("aria-label", "Ajustar RPM mínimo");
+      sliderWrap.appendChild(minHandle);
+    }
+
+    if (!maxHandle) {
+      maxHandle = document.createElement("button");
+      maxHandle.type = "button";
+      maxHandle.className = "rpm-range-handle rpm-range-handle--max";
+      maxHandle.setAttribute("aria-label", "Ajustar RPM máximo");
+      sliderWrap.appendChild(maxHandle);
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    function snap(value) {
+      return Math.round(value / STEP) * STEP;
+    }
+
+    function percentFromValue(value) {
+      return ((value - RANGE_MIN) / (RANGE_MAX - RANGE_MIN)) * 100;
+    }
+
+    function valueFromClientX(clientX) {
+      const rect = sliderWrap.getBoundingClientRect();
+      const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
+      return snap(RANGE_MIN + ratio * (RANGE_MAX - RANGE_MIN));
+    }
+
+    function updateVisuals(minVal, maxVal) {
+      const minPct = percentFromValue(minVal);
+      const maxPct = percentFromValue(maxVal);
+
+      fill.style.left = `${minPct}%`;
+      fill.style.width = `${Math.max(maxPct - minPct, 0)}%`;
+
+      minHandle.style.left = `${minPct}%`;
+      maxHandle.style.left = `${maxPct}%`;
+
+      minHandle.classList.toggle("is-active", activeThumb === "min");
+      maxHandle.classList.toggle("is-active", activeThumb === "max");
+    }
+
+    function setValues(minVal, maxVal, source) {
+      minVal = snap(clamp(minVal, RANGE_MIN, RANGE_MAX - MIN_GAP));
+      maxVal = snap(clamp(maxVal, RANGE_MIN + MIN_GAP, RANGE_MAX));
+
+      if (maxVal - minVal < MIN_GAP) {
+        if (source === "min") {
+          minVal = maxVal - MIN_GAP;
+        } else {
+          maxVal = minVal + MIN_GAP;
+        }
+      }
+
+      minVal = clamp(minVal, RANGE_MIN, RANGE_MAX - MIN_GAP);
+      maxVal = clamp(maxVal, RANGE_MIN + MIN_GAP, RANGE_MAX);
+
+      minInput.value = String(minVal);
+      maxInput.value = String(maxVal);
+      minRange.value = String(minVal);
+      maxRange.value = String(maxVal);
+
+      updateVisuals(minVal, maxVal);
+    }
+
+    function syncFromInputs(source) {
+      const nextMin = Number(minInput.value || RANGE_MIN);
+      const nextMax = Number(maxInput.value || RANGE_MAX);
+      setValues(nextMin, nextMax, source);
+    }
+
+    function syncFromRanges(source) {
+      const nextMin = Number(minRange.value || RANGE_MIN);
+      const nextMax = Number(maxRange.value || RANGE_MAX);
+      setValues(nextMin, nextMax, source);
+    }
+
+    function onDrag(clientX) {
+      if (!activeThumb) return;
+
+      const draggedValue = valueFromClientX(clientX);
+      const currentMin = Number(minInput.value || RANGE_MIN);
+      const currentMax = Number(maxInput.value || RANGE_MAX);
+
+      if (activeThumb === "min") {
+        setValues(draggedValue, currentMax, "min");
+      } else {
+        setValues(currentMin, draggedValue, "max");
+      }
+    }
+
+    function onPointerMove(event) {
+      onDrag(event.clientX);
+    }
+
+    function onPointerUp() {
+      activeThumb = null;
+      minHandle.classList.remove("is-active");
+      maxHandle.classList.remove("is-active");
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+    }
+
+    function startDrag(which, clientX) {
+      activeThumb = which;
+      updateVisuals(
+        Number(minInput.value || RANGE_MIN),
+        Number(maxInput.value || RANGE_MAX)
+      );
+      onDrag(clientX);
+      document.addEventListener("pointermove", onPointerMove);
+      document.addEventListener("pointerup", onPointerUp);
+    }
+
+    minHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("min", event.clientX);
+    });
+
+    maxHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("max", event.clientX);
+    });
+
+    sliderWrap.addEventListener("pointerdown", (event) => {
+      if (event.target === minHandle || event.target === maxHandle) return;
+
+      const clickedValue = valueFromClientX(event.clientX);
+      const currentMin = Number(minInput.value || RANGE_MIN);
+      const currentMax = Number(maxInput.value || RANGE_MAX);
+      const nextThumb =
+        Math.abs(clickedValue - currentMin) <= Math.abs(clickedValue - currentMax)
+          ? "min"
+          : "max";
+
+      startDrag(nextThumb, event.clientX);
+    });
+
+    minRange.addEventListener("input", () => syncFromRanges("min"));
+    maxRange.addEventListener("input", () => syncFromRanges("max"));
+
+    minInput.addEventListener("input", () => syncFromInputs("min"));
+    maxInput.addEventListener("input", () => syncFromInputs("max"));
+    minInput.addEventListener("blur", () => syncFromInputs("min"));
+    maxInput.addEventListener("blur", () => syncFromInputs("max"));
+
+    minHandle.addEventListener("keydown", (event) => {
+      const currentMin = Number(minInput.value || RANGE_MIN);
+      const currentMax = Number(maxInput.value || RANGE_MAX);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setValues(currentMin - STEP, currentMax, "min");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setValues(currentMin + STEP, currentMax, "min");
+      }
+    });
+
+    maxHandle.addEventListener("keydown", (event) => {
+      const currentMin = Number(minInput.value || RANGE_MIN);
+      const currentMax = Number(maxInput.value || RANGE_MAX);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setValues(currentMin, currentMax - STEP, "max");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setValues(currentMin, currentMax + STEP, "max");
+      }
+    });
+
+    setValues(
+      Number(minInput.value || minRange.value || RANGE_MIN),
+      Number(maxInput.value || maxRange.value || RANGE_MAX),
+      "max"
+    );
+  }
+
   async function loadTreatmentConfigs() {
-    const root = document.getElementById('treatment-configs-root');
+    const root = document.getElementById("treatment-configs-root");
     if (!root) return;
 
     try {
-      const response = await fetch('/components/treatment/configs', { cache: 'no-store' });
+      const response = await fetch("/components/treatment/configs", { cache: "no-store" });
       if (!response.ok) {
-        throw new Error('Não foi possível carregar os parâmetros do treatment');
+        throw new Error("Não foi possível carregar os parâmetros do treatment");
       }
 
       root.innerHTML = await response.text();
+      initTreatmentConfigUI();
     } catch (error) {
-      console.error('Erro ao carregar configs do treatment:', error);
+      console.error("Erro ao carregar configs do treatment:", error);
     }
   }
 

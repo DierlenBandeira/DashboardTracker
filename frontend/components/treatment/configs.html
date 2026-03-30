@@ -15,68 +15,189 @@
 
   <div class="treatment-configs-content">
     <div class="treatment-params-grid">
-      <section class="treatment-param-group">
-        <div class="treatment-param-group-title">Trânsito (Velocidade)</div>
-
-        <div class="treatment-param-row">
-          <label for="speedLowMax">Velocidade Baixa</label>
-          <div class="treatment-param-inline">
-            <span class="treatment-param-text">Abaixo de</span>
-            <input type="number" id="speedLowMax" value="10" step="0.01" />
-            <span class="treatment-param-unit">km/h</span>
-          </div>
+      <section class="treatment-param-group treatment-param-group--speed">
+        <div class="treatment-param-group-title-row">
+          <div class="treatment-param-group-title">Trânsito (Velocidade)</div>
+          <span class="treatment-param-pill treatment-param-pill--neutral">Range inteligente</span>
         </div>
 
-        <div class="treatment-param-row">
-          <label for="speedMediumMax">Velocidade Média</label>
-          <div class="treatment-param-inline">
-            <span class="treatment-param-text">Até</span>
-            <input type="number" id="speedMediumMax" value="15" step="0.01" />
-            <span class="treatment-param-unit">km/h</span>
-          </div>
+        <div class="small treatment-param-helper">
+          Arraste os dois marcadores para definir o final da faixa baixa e o final da faixa média. O restante vira alta automaticamente.
         </div>
 
-        <div class="treatment-param-row">
-          <label for="speedHighMin">Velocidade Alta</label>
-          <div class="treatment-param-inline">
-            <span class="treatment-param-text">Acima de</span>
-            <input type="number" id="speedHighMin" value="15" step="0.01" />
-            <span class="treatment-param-unit">km/h</span>
+        <div class="speed-range-box">
+          <div class="speed-range-scale">
+            <span>0 km/h</span>
+            <span>30 km/h</span>
+          </div>
+
+          <div class="speed-range-slider-wrap" id="speedRangeSlider">
+            <div class="speed-range-track"></div>
+            <div class="speed-range-segment speed-range-segment--low" id="speedSegLow"></div>
+            <div class="speed-range-segment speed-range-segment--medium" id="speedSegMedium"></div>
+            <div class="speed-range-segment speed-range-segment--high" id="speedSegHigh"></div>
+
+            <button
+              type="button"
+              class="speed-range-handle speed-range-handle--low"
+              id="speedLowHandle"
+              aria-label="Ajustar fim da faixa baixa"
+            ></button>
+
+            <button
+              type="button"
+              class="speed-range-handle speed-range-handle--medium"
+              id="speedMediumHandle"
+              aria-label="Ajustar fim da faixa média"
+            ></button>
+          </div>
+
+          <div class="speed-range-summary">
+            <div class="speed-summary-chip speed-summary-chip--low">
+              <span class="speed-summary-label">Baixa</span>
+              <strong>até <span id="speedLowPreview">10</span> km/h</strong>
+            </div>
+
+            <div class="speed-summary-chip speed-summary-chip--medium">
+              <span class="speed-summary-label">Média</span>
+              <strong><span id="speedMediumFromPreview">10</span> até <span id="speedMediumToPreview">15</span> km/h</strong>
+            </div>
+
+            <div class="speed-summary-chip speed-summary-chip--high">
+              <span class="speed-summary-label">Alta</span>
+              <strong>acima de <span id="speedHighLegendPreview">15</span> km/h</strong>
+            </div>
+          </div>
+
+          <div class="speed-range-values">
+            <label class="speed-range-value-card">
+              <span class="speed-range-value-label">Fim da baixa</span>
+              <div class="speed-range-value-input">
+                <input type="number" id="speedLowMax" value="10" step="0.1" min="0" max="30" />
+                <span>km/h</span>
+              </div>
+            </label>
+
+            <label class="speed-range-value-card">
+              <span class="speed-range-value-label">Fim da média</span>
+              <div class="speed-range-value-input">
+                <input type="number" id="speedMediumMax" value="15" step="0.1" min="0" max="30" />
+                <span>km/h</span>
+              </div>
+            </label>
+
+            <div class="speed-range-value-card speed-range-value-card--derived">
+              <span class="speed-range-value-label">Início da alta</span>
+              <div class="speed-range-derived-value">
+                <strong id="speedHighPreview">15</strong>
+                <span>km/h</span>
+              </div>
+              <input type="hidden" id="speedHighMin" value="15" />
+            </div>
           </div>
         </div>
       </section>
 
-      <section class="treatment-param-group">
-        <div class="treatment-param-group-title">Trânsito (RPM)</div>
-
-        <div class="treatment-param-row">
-          <label for="rpmIntenseLow">RPM Intenso</label>
-          <div class="treatment-param-inline treatment-param-inline-double">
-            <input type="number" id="rpmIntenseLow" value="900" step="1" />
-            <span class="treatment-param-text">ou</span>
-            <input type="number" id="rpmIntenseHigh" value="1900" step="1" />
-            <span class="treatment-param-text">(fora da faixa)</span>
-          </div>
+      <section class="treatment-param-group treatment-param-group--rpm-transit">
+        <div class="treatment-param-group-title-row">
+          <div class="treatment-param-group-title">Trânsito (RPM)</div>
+          <span class="treatment-param-pill treatment-param-pill--neutral">Range de 3 pontos</span>
         </div>
 
-        <div class="treatment-param-row">
-          <label for="rpmMediumMin">RPM Médio</label>
-          <div class="treatment-param-inline treatment-param-inline-double">
-            <span class="treatment-param-text">Entre</span>
-            <input type="number" id="rpmMediumMin" value="900" step="1" />
-            <span class="treatment-param-text">e</span>
-            <input type="number" id="rpmMediumMax" value="1099" step="1" />
-          </div>
+        <div class="small treatment-param-helper">
+          Arraste os três marcadores para definir início da faixa útil, início da faixa leve e fim da faixa útil.
+          O intenso é calculado automaticamente nas extremidades.
         </div>
 
-        <div class="treatment-param-row">
-          <label for="rpmLightMin">RPM Leve</label>
-          <div class="treatment-param-inline treatment-param-inline-double">
-            <span class="treatment-param-text">Entre</span>
-            <input type="number" id="rpmLightMin" value="1100" step="1" />
-            <span class="treatment-param-text">e</span>
-            <input type="number" id="rpmLightMax" value="1900" step="1" />
+        <div class="rpm-transit-box">
+          <div class="rpm-transit-scale">
+            <span>0 RPM</span>
+            <span>3000 RPM</span>
           </div>
+
+          <div class="rpm-transit-slider-wrap" id="rpmTransitSlider">
+            <div class="rpm-transit-track"></div>
+
+            <div class="rpm-transit-segment rpm-transit-segment--intense" id="rpmTransitSegIntenseLow"></div>
+            <div class="rpm-transit-segment rpm-transit-segment--medium" id="rpmTransitSegMedium"></div>
+            <div class="rpm-transit-segment rpm-transit-segment--light" id="rpmTransitSegLight"></div>
+            <div class="rpm-transit-segment rpm-transit-segment--intense" id="rpmTransitSegIntenseHigh"></div>
+
+            <button
+              type="button"
+              class="rpm-transit-handle rpm-transit-handle--start"
+              id="rpmTransitHandleStart"
+              aria-label="Ajustar início da faixa útil"
+            ></button>
+
+            <button
+              type="button"
+              class="rpm-transit-handle rpm-transit-handle--middle"
+              id="rpmTransitHandleMiddle"
+              aria-label="Ajustar início da faixa leve"
+            ></button>
+
+            <button
+              type="button"
+              class="rpm-transit-handle rpm-transit-handle--end"
+              id="rpmTransitHandleEnd"
+              aria-label="Ajustar fim da faixa útil"
+            ></button>
+          </div>
+
+          <div class="rpm-transit-summary">
+            <div class="rpm-transit-chip rpm-transit-chip--intense">
+              <span class="rpm-transit-chip-label">Intenso</span>
+              <strong>
+                abaixo de <span id="rpmIntenseLowPreview">900</span>
+                ou acima de <span id="rpmIntenseHighPreview">1900</span>
+              </strong>
+            </div>
+
+            <div class="rpm-transit-chip rpm-transit-chip--medium">
+              <span class="rpm-transit-chip-label">Médio</span>
+              <strong>
+                <span id="rpmMediumMinPreview">900</span> até <span id="rpmMediumMaxPreview">1099</span>
+              </strong>
+            </div>
+
+            <div class="rpm-transit-chip rpm-transit-chip--light">
+              <span class="rpm-transit-chip-label">Leve</span>
+              <strong>
+                <span id="rpmLightMinPreview">1100</span> até <span id="rpmLightMaxPreview">1900</span>
+              </strong>
+            </div>
+          </div>
+
+          <div class="rpm-transit-values">
+            <label class="rpm-transit-value-card">
+              <span class="rpm-transit-value-label">Início da faixa útil</span>
+              <div class="rpm-transit-value-input">
+                <input type="number" id="rpmIntenseLow" value="900" step="1" min="0" max="3000" />
+                <span>RPM</span>
+              </div>
+            </label>
+
+            <label class="rpm-transit-value-card">
+              <span class="rpm-transit-value-label">Início da faixa leve</span>
+              <div class="rpm-transit-value-input">
+                <input type="number" id="rpmLightMin" value="1100" step="1" min="0" max="3000" />
+                <span>RPM</span>
+              </div>
+            </label>
+
+            <label class="rpm-transit-value-card">
+              <span class="rpm-transit-value-label">Fim da faixa útil</span>
+              <div class="rpm-transit-value-input">
+                <input type="number" id="rpmLightMax" value="1900" step="1" min="0" max="3000" />
+                <span>RPM</span>
+              </div>
+            </label>
+          </div>
+
+          <input type="hidden" id="rpmIntenseHigh" value="1900" />
+          <input type="hidden" id="rpmMediumMin" value="900" />
+          <input type="hidden" id="rpmMediumMax" value="1099" />
         </div>
       </section>
 
@@ -143,16 +264,57 @@
         </div>
       </section>
 
-      <section class="treatment-param-group">
-        <div class="treatment-param-group-title">Melhor faixa de RPM</div>
+      <section class="treatment-param-group treatment-param-group--range">
+        <div class="treatment-param-group-title-row">
+          <div class="treatment-param-group-title">Melhor faixa de RPM</div>
+          <span class="treatment-param-pill">Faixa ideal</span>
+        </div>
 
-        <div class="treatment-param-row">
-          <label for="bestRpmMin">Faixa ideal</label>
-          <div class="treatment-param-inline treatment-param-inline-double">
-            <span class="treatment-param-text">Entre</span>
-            <input type="number" id="bestRpmMin" value="1100" step="1" />
-            <span class="treatment-param-text">e</span>
-            <input type="number" id="bestRpmMax" value="1900" step="1" />
+        <div class="small treatment-param-helper">
+          Ajuste visualmente a faixa recomendada de operação do motor.
+        </div>
+
+        <div class="rpm-range-box">
+          <div class="rpm-range-scale">
+            <span>0</span>
+            <span>3000</span>
+          </div>
+
+          <div class="rpm-range-slider-wrap">
+            <div class="rpm-range-track"></div>
+            <div class="rpm-range-track-fill" id="bestRpmTrackFill"></div>
+
+            <input
+              type="range"
+              id="bestRpmMinRange"
+              min="0"
+              max="3000"
+              step="50"
+              value="1100"
+              class="rpm-range-slider"
+            />
+
+            <input
+              type="range"
+              id="bestRpmMaxRange"
+              min="0"
+              max="3000"
+              step="50"
+              value="1900"
+              class="rpm-range-slider"
+            />
+          </div>
+
+          <div class="rpm-range-values">
+            <div class="rpm-range-value-card">
+              <span class="rpm-range-value-label">Mínimo</span>
+              <input type="number" id="bestRpmMin" value="1100" step="50" />
+            </div>
+
+            <div class="rpm-range-value-card">
+              <span class="rpm-range-value-label">Máximo</span>
+              <input type="number" id="bestRpmMax" value="1900" step="50" />
+            </div>
           </div>
         </div>
       </section>

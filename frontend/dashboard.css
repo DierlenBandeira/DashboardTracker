@@ -1916,3 +1916,968 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.treatment-param-group--range {
+  background: linear-gradient(180deg, #ffffff 0%, #fffaf2 100%);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+}
+
+.treatment-param-group-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.treatment-param-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.treatment-param-helper {
+  margin-bottom: 14px;
+}
+
+/* ===== Fix do range duplo de RPM ===== */
+
+.rpm-range-slider-wrap {
+  position: relative;
+  height: 30px;
+  display: flex;
+  align-items: center;
+}
+
+.rpm-range-track,
+.rpm-range-track-fill {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 8px;
+  border-radius: 999px;
+}
+
+.rpm-range-track {
+  left: 0;
+  right: 0;
+  background: #e5e7eb;
+  z-index: 1;
+}
+
+.rpm-range-track-fill {
+  left: 0;
+  width: 0;
+  background: linear-gradient(90deg, #6366f1 0%, #4f46e5 100%);
+  z-index: 2;
+}
+
+.rpm-range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  width: 100%;
+  height: 30px;
+
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+
+  pointer-events: none;
+  z-index: 3;
+}
+
+#bestRpmMinRange {
+  z-index: 4;
+}
+
+#bestRpmMaxRange {
+  z-index: 5;
+}
+
+.rpm-range-slider::-webkit-slider-runnable-track {
+  -webkit-appearance: none;
+  height: 8px;
+  background: transparent;
+  border: 0;
+}
+
+.rpm-range-slider::-moz-range-track {
+  height: 8px;
+  background: transparent;
+  border: 0;
+}
+
+.rpm-range-slider::-moz-range-progress {
+  background: transparent;
+}
+
+.rpm-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #6366f1;
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.25);
+  cursor: pointer;
+  pointer-events: auto;
+  position: relative;
+}
+
+.rpm-range-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #6366f1;
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.25);
+  cursor: pointer;
+  pointer-events: auto;
+  position: relative;
+}
+
+.rpm-range-slider:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.rpm-range-value-card input[type="number"] {
+  width: 100%;
+  min-width: 0;
+}
+
+/* ===== RPM range - ajuste visual e handles custom ===== */
+
+.treatment-param-group--range {
+  background: #fffdf8;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  box-shadow: none;
+}
+
+.treatment-param-group-title-row {
+  margin-bottom: 10px;
+}
+
+.treatment-param-pill {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.treatment-param-helper {
+  margin-bottom: 16px;
+  color: #64748b;
+}
+
+.rpm-range-box {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rpm-range-scale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.rpm-range-slider-wrap {
+  position: relative;
+  height: 22px;
+  display: block;
+  margin: 2px 0 0;
+  isolation: isolate;
+}
+
+.rpm-range-track,
+.rpm-range-track-fill {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 6px;
+  border-radius: 999px;
+}
+
+.rpm-range-track {
+  left: 0;
+  right: 0;
+  background: #e5e7eb;
+  z-index: 1;
+}
+
+.rpm-range-track-fill {
+  left: 0;
+  width: 0;
+  background: linear-gradient(90deg, #fb923c 0%, #f97316 100%);
+  z-index: 2;
+}
+
+.rpm-range-slider {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  appearance: none;
+  min-width: 0;
+}
+
+.rpm-range-handle {
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid #f97316;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.14);
+  cursor: grab;
+  z-index: 4;
+  padding: 0;
+}
+
+.rpm-range-handle:hover {
+  border-color: #ea580c;
+  box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.18);
+}
+
+.rpm-range-handle.is-active,
+.rpm-range-handle:focus-visible {
+  outline: none;
+  border-color: #c2410c;
+  box-shadow: 0 0 0 5px rgba(249, 115, 22, 0.18);
+}
+
+.rpm-range-handle:active {
+  cursor: grabbing;
+}
+
+.rpm-range-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.rpm-range-value-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #f8fafc;
+  box-shadow: none;
+}
+
+.rpm-range-value-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.rpm-range-value-card input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.rpm-range-value-card input[type="number"]:focus {
+  border-color: rgba(249, 115, 22, 0.72);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.12);
+}
+
+@media (max-width: 640px) {
+  .rpm-range-values {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== UX melhorado - Trânsito (Velocidade) ===== */
+
+.treatment-param-group--speed {
+  background: linear-gradient(180deg, #ffffff 0%, #fcfcfd 100%);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: none;
+}
+
+.treatment-param-pill--neutral {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+/* Empilhar os cards de velocidade */
+.speed-thresholds-grid,
+.speed-range-summary,
+.speed-range-inputs {
+  display: grid;
+  grid-template-columns: 1fr !important;
+  gap: 12px;
+}
+
+.speed-threshold-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.speed-threshold-card--derived {
+  background: linear-gradient(180deg, #fffaf5 0%, #fff7ed 100%);
+  border-color: #fed7aa;
+}
+
+.speed-threshold-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.speed-threshold-hint {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.speed-threshold-caption {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.speed-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.speed-input-wrap input {
+  min-width: 0;
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: none;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.speed-input-wrap input:focus {
+  border-color: #fb923c;
+  box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.14);
+}
+
+.speed-input-unit {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.speed-derived-value {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid #fed7aa;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.speed-derived-value strong {
+  font-size: 18px;
+  color: #c2410c;
+}
+
+.speed-preview-card {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.speed-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.speed-preview-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.speed-preview-scale {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.speed-preview-bar {
+  display: flex;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #e2e8f0;
+}
+
+.speed-preview-seg {
+  height: 100%;
+  transition: width 0.2s ease;
+}
+
+.speed-preview-seg--low {
+  background: #f97316;
+}
+
+.speed-preview-seg--medium {
+  background: #fbbf24;
+}
+
+.speed-preview-seg--high {
+  background: #cbd5e1;
+}
+
+.speed-preview-legend {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.speed-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #475569;
+  flex-wrap: wrap;
+}
+
+.speed-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 10px;
+}
+
+.speed-legend-dot--low {
+  background: #f97316;
+}
+
+.speed-legend-dot--medium {
+  background: #fbbf24;
+}
+
+.speed-legend-dot--high {
+  background: #94a3b8;
+}
+
+@media (max-width: 900px) {
+  .speed-thresholds-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .speed-preview-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* =============================
+   Treatment - Velocidade com range selector
+   ============================= */
+
+.treatment-param-group--speed {
+  background: linear-gradient(180deg, #ffffff 0%, #fcfcfd 100%);
+}
+
+.treatment-param-pill--neutral {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.speed-range-box {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.speed-range-scale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  padding: 0 2px;
+}
+
+.speed-range-slider-wrap {
+  position: relative;
+  height: 26px;
+  margin-top: 2px;
+  isolation: isolate;
+  touch-action: none;
+}
+
+.speed-range-track,
+.speed-range-segment {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 8px;
+  border-radius: 999px;
+}
+
+.speed-range-track {
+  left: 0;
+  right: 0;
+  background: #e5e7eb;
+  z-index: 1;
+}
+
+.speed-range-segment--low {
+  left: 0;
+  width: 0;
+  background: linear-gradient(90deg, #fb923c 0%, #f97316 100%);
+  z-index: 2;
+}
+
+.speed-range-segment--medium {
+  left: 0;
+  width: 0;
+  background: linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%);
+  z-index: 2;
+}
+
+.speed-range-segment--high {
+  left: 0;
+  width: 0;
+  background: #cbd5e1;
+  z-index: 2;
+}
+
+.speed-range-handle {
+  position: absolute;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  border: 2px solid #f97316;
+  background: #ffffff;
+  box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.14);
+  cursor: grab;
+  z-index: 4;
+  padding: 0;
+}
+
+.speed-range-handle--medium {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.14);
+}
+
+.speed-range-handle:hover {
+  transform: translate(-50%, -50%) scale(1.04);
+}
+
+.speed-range-handle.is-active,
+.speed-range-handle:focus-visible {
+  outline: none;
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.speed-range-handle--low.is-active,
+.speed-range-handle--low:focus-visible {
+  box-shadow: 0 0 0 6px rgba(249, 115, 22, 0.18);
+}
+
+.speed-range-handle--medium.is-active,
+.speed-range-handle--medium:focus-visible {
+  box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.18);
+}
+
+.speed-range-handle:active {
+  cursor: grabbing;
+}
+
+.speed-range-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.speed-summary-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.speed-summary-chip strong {
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.speed-summary-chip--low {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.speed-summary-chip--medium {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.speed-summary-chip--high {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.speed-summary-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.speed-range-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.speed-range-value-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.speed-range-value-card--derived {
+  background: #f8fafc;
+}
+
+.speed-range-value-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.speed-range-value-input,
+.speed-range-derived-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.speed-range-value-input input {
+  min-width: 0;
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  box-shadow: none;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.speed-range-value-input input:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.14);
+}
+
+.speed-range-value-input span,
+.speed-range-derived-value span {
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.speed-range-derived-value {
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.speed-range-derived-value strong {
+  font-size: 16px;
+  color: #0f172a;
+}
+
+@media (max-width: 900px) {
+  .speed-range-summary,
+  .speed-range-values {
+    grid-template-columns: 1fr;
+  }
+}
+
+.treatment-param-group--speed .speed-range-values {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.treatment-param-group--speed .speed-range-value-caFrd {
+  width: 100%;
+  max-width: none;
+  padding: 14px;
+}
+
+.treatment-param-group--speed .speed-range-value-input,
+.treatment-param-group--speed .speed-range-derived-value {
+  max-width: 220px;
+}
+
+/* ===== Trânsito (RPM) - selector de 3 pontos ===== */
+
+.treatment-param-group--rpm-transit {
+  background: linear-gradient(180deg, #ffffff 0%, #fcfcfd 100%);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: none;
+}
+
+.rpm-transit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rpm-transit-scale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.rpm-transit-slider-wrap {
+  position: relative;
+  height: 24px;
+  margin-top: 2px;
+  isolation: isolate;
+}
+
+.rpm-transit-track,
+.rpm-transit-segment {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 8px;
+  border-radius: 999px;
+}
+
+.rpm-transit-track {
+  left: 0;
+  right: 0;
+  background: #e5e7eb;
+  z-index: 1;
+}
+
+.rpm-transit-segment {
+  z-index: 2;
+}
+
+.rpm-transit-segment--intense {
+  background: #cbd5e1;
+}
+
+.rpm-transit-segment--medium {
+  background: #fbbf24;
+}
+
+.rpm-transit-segment--light {
+  background: #34d399;
+}
+
+.rpm-transit-handle {
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: #ffffff;
+  border: 2px solid #475569;
+  box-shadow: 0 0 0 3px rgba(71, 85, 105, 0.12);
+  cursor: grab;
+  z-index: 4;
+  padding: 0;
+}
+
+.rpm-transit-handle:hover {
+  box-shadow: 0 0 0 4px rgba(71, 85, 105, 0.16);
+}
+
+.rpm-transit-handle.is-active,
+.rpm-transit-handle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 5px rgba(71, 85, 105, 0.18);
+}
+
+.rpm-transit-handle:active {
+  cursor: grabbing;
+}
+
+.rpm-transit-summary {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.rpm-transit-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.rpm-transit-chip--intense {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.rpm-transit-chip--medium {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.rpm-transit-chip--light {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
+.rpm-transit-chip-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.rpm-transit-values {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.rpm-transit-value-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #f8fafc;
+  box-shadow: none;
+}
+
+.rpm-transit-value-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.rpm-transit-value-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 240px;
+}
+
+.rpm-transit-value-input input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.rpm-transit-value-input input[type="number"]:focus {
+  border-color: rgba(71, 85, 105, 0.72);
+  box-shadow: 0 0 0 3px rgba(71, 85, 105, 0.12);
+}
+
+.rpm-transit-value-input span {
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  white-space: nowrap;
+}
