@@ -3,7 +3,7 @@ const CONFIG = {
   DEFAULT_ZOOM: 4,
   MAP_ZOOM_ON_REFERENCE: 10,
   DATA_SOURCES: [
-    "./frontend/data/municipios.csv",
+    "./data/municipios.csv",
   ],
   NOMINATIM_SEARCH_URL: "https://nominatim.openstreetmap.org/search",
   NOMINATIM_REVERSE_URL: "https://nominatim.openstreetmap.org/reverse",
