@@ -37,6 +37,9 @@
 
         <div class="chart-actions treatment-actions">
           <button type="button" id="btnSelectFile">Carregar arquivo</button>
+          <button type="button" id="btnAddAnalysisColumns" class="btn-analysis-columns" disabled>
+            Adicionar colunas de análise
+          </button>
           <button type="button" id="btnExportFile" disabled>Exportar tratado</button>
           <button type="button" id="btnClearFile" disabled>Limpar</button>
         </div>
@@ -45,7 +48,7 @@
       <div class="treatment-dropzone">
         <div class="treatment-dropzone-title">Upload de arquivo Excel</div>
         <div class="treatment-dropzone-subtitle">
-          Envie um arquivo <span class="treatment-highlight">.xlsx, .xls ou .csv</span>,
+          Envie um arquivo <span class="treatment-highlight">.xlsx, .xls</span>,
           visualize a tabela e exporte a versão tratada.
         </div>
         <div class="treatment-status-note">
@@ -132,7 +135,9 @@
     </section>
   </div>
 
+ 
   <script src="/js/sidebar.js"></script>
   <script src="/js/treatment.js"></script>
+  <script src="/js/tratamento-analise-step1.js"></script>
 </body>
 </html>

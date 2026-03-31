@@ -84,6 +84,225 @@
     topScrollInner: document.getElementById("treatmentTopScrollInner")
   };
 
+  function initBrakeThresholdUX() {
+    const mediumMinInput = document.getElementById("brakeMediumMin");
+    const intenseMinInput = document.getElementById("brakeIntenseMin");
+    const lightMaxHidden = document.getElementById("brakeLightMax");
+    const mediumMaxHidden = document.getElementById("brakeMediumMax");
+
+    const lightMaxPreview = document.getElementById("brakeLightMaxPreview");
+    const mediumMinPreview = document.getElementById("brakeMediumMinPreview");
+    const mediumMaxPreview = document.getElementById("brakeMediumMaxPreview");
+    const intenseMinPreview = document.getElementById("brakeIntenseMinPreview");
+
+    const lightMaxValuePreview = document.getElementById("brakeLightMaxValuePreview");
+    const mediumMaxValuePreview = document.getElementById("brakeMediumMaxValuePreview");
+
+    const slider = document.getElementById("brakeRangeSlider");
+    const mediumHandle = document.getElementById("brakeMediumHandle");
+    const intenseHandle = document.getElementById("brakeIntenseHandle");
+
+    const segLight = document.getElementById("brakeSegLight");
+    const segMedium = document.getElementById("brakeSegMedium");
+    const segIntense = document.getElementById("brakeSegIntense");
+
+    if (
+      !mediumMinInput || !intenseMinInput || !lightMaxHidden || !mediumMaxHidden ||
+      !lightMaxPreview || !mediumMinPreview || !mediumMaxPreview || !intenseMinPreview ||
+      !lightMaxValuePreview || !mediumMaxValuePreview ||
+      !slider || !mediumHandle || !intenseHandle ||
+      !segLight || !segMedium || !segIntense
+    ) return;
+
+    const SCALE_MIN = 0;
+    const SCALE_MAX = 8;
+    const STEP = 0.01;
+    const MIN_GAP = STEP;
+
+    let activeHandle = null;
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    function snap(value) {
+      return Math.round(value / STEP) * STEP;
+    }
+
+    function formatInputValue(value) {
+      return String(Number(value.toFixed(2)));
+    }
+
+    function formatPreviewValue(value) {
+      const rounded = Number(value.toFixed(2));
+      if (Number.isInteger(rounded)) return String(rounded);
+      return rounded.toFixed(2).replace(".", ",");
+    }
+
+    function valueToPercent(value) {
+      return ((value - SCALE_MIN) / (SCALE_MAX - SCALE_MIN)) * 100;
+    }
+
+    function clientXToValue(clientX) {
+      const rect = slider.getBoundingClientRect();
+      const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
+      return snap(SCALE_MIN + ratio * (SCALE_MAX - SCALE_MIN));
+    }
+
+    function applyValues(mediumMin, intenseMin, source) {
+      mediumMin = snap(clamp(mediumMin, SCALE_MIN + STEP, SCALE_MAX - MIN_GAP));
+      intenseMin = snap(clamp(intenseMin, SCALE_MIN + (STEP * 2), SCALE_MAX));
+
+      if (intenseMin - mediumMin < MIN_GAP) {
+        if (source === "medium") {
+          mediumMin = intenseMin - MIN_GAP;
+        } else {
+          intenseMin = mediumMin + MIN_GAP;
+        }
+      }
+
+      mediumMin = snap(clamp(mediumMin, SCALE_MIN + STEP, SCALE_MAX - MIN_GAP));
+      intenseMin = snap(clamp(intenseMin, mediumMin + MIN_GAP, SCALE_MAX));
+
+      const lightMax = Math.max(mediumMin - STEP, 0);
+      const mediumMax = Math.max(intenseMin - STEP, mediumMin);
+
+      mediumMinInput.value = formatInputValue(mediumMin);
+      intenseMinInput.value = formatInputValue(intenseMin);
+
+      lightMaxHidden.value = formatInputValue(lightMax);
+      mediumMaxHidden.value = formatInputValue(mediumMax);
+
+      lightMaxPreview.textContent = formatPreviewValue(lightMax);
+      mediumMinPreview.textContent = formatPreviewValue(mediumMin);
+      mediumMaxPreview.textContent = formatPreviewValue(mediumMax);
+      intenseMinPreview.textContent = formatPreviewValue(intenseMin);
+
+      lightMaxValuePreview.textContent = formatPreviewValue(lightMax);
+      mediumMaxValuePreview.textContent = formatPreviewValue(mediumMax);
+
+      const mediumPct = valueToPercent(mediumMin);
+      const intensePct = valueToPercent(intenseMin);
+
+      segLight.style.left = "0%";
+      segLight.style.width = `${mediumPct}%`;
+
+      segMedium.style.left = `${mediumPct}%`;
+      segMedium.style.width = `${Math.max(intensePct - mediumPct, 0)}%`;
+
+      segIntense.style.left = `${intensePct}%`;
+      segIntense.style.width = `${Math.max(100 - intensePct, 0)}%`;
+
+      mediumHandle.style.left = `${mediumPct}%`;
+      intenseHandle.style.left = `${intensePct}%`;
+    }
+
+    function syncFromInputs(source) {
+      const mediumMin = Number(mediumMinInput.value || 2);
+      const intenseMin = Number(intenseMinInput.value || 4);
+      applyValues(mediumMin, intenseMin, source);
+    }
+
+    function onDrag(clientX) {
+      if (!activeHandle) return;
+
+      const draggedValue = clientXToValue(clientX);
+      const currentMedium = Number(mediumMinInput.value || 2);
+      const currentIntense = Number(intenseMinInput.value || 4);
+
+      if (activeHandle === "medium") {
+        applyValues(draggedValue, currentIntense, "medium");
+      } else {
+        applyValues(currentMedium, draggedValue, "intense");
+      }
+    }
+
+    function onPointerMove(event) {
+      onDrag(event.clientX);
+    }
+
+    function onPointerUp() {
+      activeHandle = null;
+      mediumHandle.classList.remove("is-active");
+      intenseHandle.classList.remove("is-active");
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+    }
+
+    function startDrag(which, clientX) {
+      activeHandle = which;
+      mediumHandle.classList.toggle("is-active", which === "medium");
+      intenseHandle.classList.toggle("is-active", which === "intense");
+      onDrag(clientX);
+      document.addEventListener("pointermove", onPointerMove);
+      document.addEventListener("pointerup", onPointerUp);
+    }
+
+    mediumHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("medium", event.clientX);
+    });
+
+    intenseHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("intense", event.clientX);
+    });
+
+    slider.addEventListener("pointerdown", (event) => {
+      if (event.target === mediumHandle || event.target === intenseHandle) return;
+
+      const clickedValue = clientXToValue(event.clientX);
+      const currentMedium = Number(mediumMinInput.value || 2);
+      const currentIntense = Number(intenseMinInput.value || 4);
+
+      const closest =
+        Math.abs(clickedValue - currentMedium) <= Math.abs(clickedValue - currentIntense)
+          ? "medium"
+          : "intense";
+
+      startDrag(closest, event.clientX);
+    });
+
+    mediumMinInput.addEventListener("input", () => syncFromInputs("medium"));
+    intenseMinInput.addEventListener("input", () => syncFromInputs("intense"));
+    mediumMinInput.addEventListener("blur", () => syncFromInputs("medium"));
+    intenseMinInput.addEventListener("blur", () => syncFromInputs("intense"));
+
+    mediumHandle.addEventListener("keydown", (event) => {
+      const currentMedium = Number(mediumMinInput.value || 2);
+      const currentIntense = Number(intenseMinInput.value || 4);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applyValues(currentMedium - STEP, currentIntense, "medium");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        applyValues(currentMedium + STEP, currentIntense, "medium");
+      }
+    });
+
+    intenseHandle.addEventListener("keydown", (event) => {
+      const currentMedium = Number(mediumMinInput.value || 2);
+      const currentIntense = Number(intenseMinInput.value || 4);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applyValues(currentMedium, currentIntense - STEP, "intense");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        applyValues(currentMedium, currentIntense + STEP, "intense");
+      }
+    });
+
+    applyValues(
+      Number(mediumMinInput.value || 2),
+      Number(intenseMinInput.value || 4),
+      "intense"
+    );
+  }
+
   function initSpeedThresholdUX() {
     const lowInput = document.getElementById("speedLowMax");
     const mediumInput = document.getElementById("speedMediumMax");
@@ -282,7 +501,7 @@
     });
 
     applyValues(
-      Number(lowInput.value || 10),
+      Number(lowInput .value || 10),
       Number(mediumInput.value || 15),
       "medium"
     );
@@ -591,9 +810,231 @@
       .toLowerCase();
   }
 
+  function initAccelThresholdUX() {
+    const mediumMinInput = document.getElementById("accelMediumMin");
+    const mediumMaxInput = document.getElementById("accelMediumMax");
+    const lightMaxHidden = document.getElementById("accelLightMax");
+    const intenseMinHidden = document.getElementById("accelIntenseMin");
+
+    const lightMaxPreview = document.getElementById("accelLightMaxPreview");
+    const mediumMinPreview = document.getElementById("accelMediumMinPreview");
+    const mediumMaxPreview = document.getElementById("accelMediumMaxPreview");
+    const intenseMinPreview = document.getElementById("accelIntenseMinPreview");
+
+    const lightMaxValuePreview = document.getElementById("accelLightMaxValuePreview");
+    const intenseMinValuePreview = document.getElementById("accelIntenseMinValuePreview");
+
+    const slider = document.getElementById("accelRangeSlider");
+    const mediumMinHandle = document.getElementById("accelMediumMinHandle");
+    const mediumMaxHandle = document.getElementById("accelMediumMaxHandle");
+
+    const segLight = document.getElementById("accelSegLight");
+    const segMedium = document.getElementById("accelSegMedium");
+    const segIntense = document.getElementById("accelSegIntense");
+
+    if (
+      !mediumMinInput || !mediumMaxInput || !lightMaxHidden || !intenseMinHidden ||
+      !lightMaxPreview || !mediumMinPreview || !mediumMaxPreview || !intenseMinPreview ||
+      !lightMaxValuePreview || !intenseMinValuePreview ||
+      !slider || !mediumMinHandle || !mediumMaxHandle ||
+      !segLight || !segMedium || !segIntense
+    ) return;
+
+    const SCALE_MIN = 0;
+    const SCALE_MAX = 100;
+    const STEP = 0.01;
+    const MIN_GAP = STEP;
+
+    let activeHandle = null;
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    function snap(value) {
+      return Math.round(value / STEP) * STEP;
+    }
+
+    function formatInputValue(value) {
+      return String(Number(value.toFixed(2)));
+    }
+
+    function formatPreviewValue(value) {
+      const rounded = Number(value.toFixed(2));
+      if (Number.isInteger(rounded)) return String(rounded);
+      return rounded.toFixed(2).replace(".", ",");
+    }
+
+    function valueToPercent(value) {
+      return ((value - SCALE_MIN) / (SCALE_MAX - SCALE_MIN)) * 100;
+    }
+
+    function clientXToValue(clientX) {
+      const rect = slider.getBoundingClientRect();
+      const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
+      return snap(SCALE_MIN + ratio * (SCALE_MAX - SCALE_MIN));
+    }
+
+    function applyValues(mediumMin, mediumMax, source) {
+      mediumMin = snap(clamp(mediumMin, SCALE_MIN, SCALE_MAX - MIN_GAP));
+      mediumMax = snap(clamp(mediumMax, SCALE_MIN + MIN_GAP, SCALE_MAX - MIN_GAP));
+
+      if (mediumMax - mediumMin < MIN_GAP) {
+        if (source === "start") {
+          mediumMin = mediumMax - MIN_GAP;
+        } else {
+          mediumMax = mediumMin + MIN_GAP;
+        }
+      }
+
+      mediumMin = snap(clamp(mediumMin, SCALE_MIN, SCALE_MAX - MIN_GAP));
+      mediumMax = snap(clamp(mediumMax, mediumMin + MIN_GAP, SCALE_MAX - MIN_GAP));
+
+      const lightMax = mediumMin;
+      const intenseMin = Math.min(mediumMax + STEP, SCALE_MAX);
+
+      mediumMinInput.value = formatInputValue(mediumMin);
+      mediumMaxInput.value = formatInputValue(mediumMax);
+
+      lightMaxHidden.value = formatInputValue(lightMax);
+      intenseMinHidden.value = formatInputValue(intenseMin);
+
+      lightMaxPreview.textContent = formatPreviewValue(lightMax);
+      mediumMinPreview.textContent = formatPreviewValue(mediumMin);
+      mediumMaxPreview.textContent = formatPreviewValue(mediumMax);
+      intenseMinPreview.textContent = formatPreviewValue(intenseMin);
+
+      lightMaxValuePreview.textContent = formatPreviewValue(lightMax);
+      intenseMinValuePreview.textContent = formatPreviewValue(intenseMin);
+
+      const minPct = valueToPercent(mediumMin);
+      const maxPct = valueToPercent(mediumMax);
+      const intensePct = valueToPercent(intenseMin);
+
+      segLight.style.left = "0%";
+      segLight.style.width = `${minPct}%`;
+
+      segMedium.style.left = `${minPct}%`;
+      segMedium.style.width = `${Math.max(maxPct - minPct, 0)}%`;
+
+      segIntense.style.left = `${intensePct}%`;
+      segIntense.style.width = `${Math.max(100 - intensePct, 0)}%`;
+
+      mediumMinHandle.style.left = `${minPct}%`;
+      mediumMaxHandle.style.left = `${maxPct}%`;
+    }
+
+    function syncFromInputs(source) {
+      const mediumMin = Number(mediumMinInput.value || 30);
+      const mediumMax = Number(mediumMaxInput.value || 60);
+      applyValues(mediumMin, mediumMax, source);
+    }
+
+    function onDrag(clientX) {
+      if (!activeHandle) return;
+
+      const draggedValue = clientXToValue(clientX);
+      const currentMin = Number(mediumMinInput.value || 30);
+      const currentMax = Number(mediumMaxInput.value || 60);
+
+      if (activeHandle === "start") {
+        applyValues(draggedValue, currentMax, "start");
+      } else {
+        applyValues(currentMin, draggedValue, "end");
+      }
+    }
+
+    function onPointerMove(event) {
+      onDrag(event.clientX);
+    }
+
+    function onPointerUp() {
+      activeHandle = null;
+      mediumMinHandle.classList.remove("is-active");
+      mediumMaxHandle.classList.remove("is-active");
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+    }
+
+    function startDrag(which, clientX) {
+      activeHandle = which;
+      mediumMinHandle.classList.toggle("is-active", which === "start");
+      mediumMaxHandle.classList.toggle("is-active", which === "end");
+      onDrag(clientX);
+      document.addEventListener("pointermove", onPointerMove);
+      document.addEventListener("pointerup", onPointerUp);
+    }
+
+    mediumMinHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("start", event.clientX);
+    });
+
+    mediumMaxHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startDrag("end", event.clientX);
+    });
+
+    slider.addEventListener("pointerdown", (event) => {
+      if (event.target === mediumMinHandle || event.target === mediumMaxHandle) return;
+
+      const clickedValue = clientXToValue(event.clientX);
+      const currentMin = Number(mediumMinInput.value || 30);
+      const currentMax = Number(mediumMaxInput.value || 60);
+
+      const closest =
+        Math.abs(clickedValue - currentMin) <= Math.abs(clickedValue - currentMax)
+          ? "start"
+          : "end";
+
+      startDrag(closest, event.clientX);
+    });
+
+    mediumMinInput.addEventListener("input", () => syncFromInputs("start"));
+    mediumMaxInput.addEventListener("input", () => syncFromInputs("end"));
+    mediumMinInput.addEventListener("blur", () => syncFromInputs("start"));
+    mediumMaxInput.addEventListener("blur", () => syncFromInputs("end"));
+
+    mediumMinHandle.addEventListener("keydown", (event) => {
+      const currentMin = Number(mediumMinInput.value || 30);
+      const currentMax = Number(mediumMaxInput.value || 60);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applyValues(currentMin - STEP, currentMax, "start");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        applyValues(currentMin + STEP, currentMax, "start");
+      }
+    });
+
+    mediumMaxHandle.addEventListener("keydown", (event) => {
+      const currentMin = Number(mediumMinInput.value || 30);
+      const currentMax = Number(mediumMaxInput.value || 60);
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        applyValues(currentMin, currentMax - STEP, "end");
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        applyValues(currentMin, currentMax + STEP, "end");
+      }
+    });
+
+    applyValues(
+      Number(mediumMinInput.value || 30),
+      Number(mediumMaxInput.value || 60),
+      "end"
+    );
+  }
+
   function initTreatmentConfigUI() {
     initSpeedThresholdUX();
     initTransitRpmUX();
+    initBrakeThresholdUX();
+    initAccelThresholdUX();
     initBestRpmRange();
   }
 
@@ -862,7 +1303,7 @@
     if (!text) return null;
 
     text = text
-      .replace(/^(dom|seg|ter|qua|qui|sex|s[áa]b)\.?\s+/i, "")
+      .replace(/^(dom|seg|ter|qua|quin|sex|s[áa]b)\.?\s+/i, "")
       .trim();
 
     let match = text.match(

@@ -201,66 +201,196 @@
         </div>
       </section>
 
-      <section class="treatment-param-group">
-        <div class="treatment-param-group-title">Frenagens</div>
-
-        <div class="treatment-param-row">
-          <label for="brakeIntenseMin">Intensa p/min</label>
-          <div class="treatment-param-inline">
-            <span class="treatment-param-text">≥</span>
-            <input type="number" id="brakeIntenseMin" value="4" step="0.01" />
-          </div>
+      <section class="treatment-param-group treatment-param-group--brake-range">
+        <div class="treatment-param-group-title-row">
+          <div class="treatment-param-group-title">Frenagens</div>
+          <span class="treatment-param-pill treatment-param-pill--neutral">Range de 2 pontos</span>
         </div>
 
-        <div class="treatment-param-row">
-          <label for="brakeMediumMin">Média p/min</label>
-          <div class="treatment-param-inline treatment-param-inline-double">
-            <span class="treatment-param-text">Entre</span>
-            <input type="number" id="brakeMediumMin" value="2" step="0.01" />
-            <span class="treatment-param-text">e</span>
-            <input type="number" id="brakeMediumMax" value="3.99" step="0.01" />
-          </div>
+        <div class="small treatment-param-helper">
+          Arraste os dois marcadores para definir o início da faixa média e o início da faixa intensa.
+          A faixa leve e o teto da média são calculados automaticamente.
         </div>
 
-        <div class="treatment-param-row">
-          <label for="brakeLightMax">Leve p/min</label>
-          <div class="treatment-param-inline">
-            <span class="treatment-param-text">≤</span>
-            <input type="number" id="brakeLightMax" value="1.99" step="0.01" />
+        <div class="brake-range-box">
+          <div class="brake-range-scale">
+            <span>0 p/min</span>
+            <span>8 p/min</span>
           </div>
+
+          <div class="brake-range-slider-wrap" id="brakeRangeSlider">
+            <div class="brake-range-track"></div>
+
+            <div class="brake-range-segment brake-range-segment--light" id="brakeSegLight"></div>
+            <div class="brake-range-segment brake-range-segment--medium" id="brakeSegMedium"></div>
+            <div class="brake-range-segment brake-range-segment--intense" id="brakeSegIntense"></div>
+
+            <button
+              type="button"
+              class="brake-range-handle brake-range-handle--medium"
+              id="brakeMediumHandle"
+              aria-label="Ajustar início da faixa média"
+            ></button>
+
+            <button
+              type="button"
+              class="brake-range-handle brake-range-handle--intense"
+              id="brakeIntenseHandle"
+              aria-label="Ajustar início da faixa intensa"
+            ></button>
+          </div>
+
+          <div class="brake-range-summary">
+            <div class="brake-range-chip brake-range-chip--light">
+              <span class="brake-range-chip-label">Leve</span>
+              <strong>até <span id="brakeLightMaxPreview">1,99</span> p/min</strong>
+            </div>
+
+            <div class="brake-range-chip brake-range-chip--medium">
+              <span class="brake-range-chip-label">Média</span>
+              <strong>
+                <span id="brakeMediumMinPreview">2</span> até <span id="brakeMediumMaxPreview">3,99</span> p/min
+              </strong>
+            </div>
+
+            <div class="brake-range-chip brake-range-chip--intense">
+              <span class="brake-range-chip-label">Intensa</span>
+              <strong>acima de <span id="brakeIntenseMinPreview">4</span> p/min</strong>
+            </div>
+          </div>
+
+          <div class="brake-range-values">
+            <div class="brake-range-value-card brake-range-value-card--derived">
+              <span class="brake-range-value-label">Leve até</span>
+              <div class="brake-range-derived-value">
+                <strong id="brakeLightMaxValuePreview">1,99</strong>
+                <span>p/min</span>
+              </div>
+            </div>
+
+            <label class="brake-range-value-card">
+              <span class="brake-range-value-label">Início da média</span>
+              <div class="brake-range-value-input">
+                <input type="number" id="brakeMediumMin" value="2" step="0.01" min="0" max="8" />
+                <span>p/min</span>
+              </div>
+            </label>
+
+            <div class="brake-range-value-card brake-range-value-card--derived">
+              <span class="brake-range-value-label">Média até</span>
+              <div class="brake-range-derived-value">
+                <strong id="brakeMediumMaxValuePreview">3,99</strong>
+                <span>p/min</span>
+              </div>
+            </div>
+
+            <label class="brake-range-value-card">
+              <span class="brake-range-value-label">Início da intensa</span>
+              <div class="brake-range-value-input">
+                <input type="number" id="brakeIntenseMin" value="4" step="0.01" min="0" max="8" />
+                <span>p/min</span>
+              </div>
+            </label>
+          </div>
+
+          <input type="hidden" id="brakeLightMax" value="1.99" />
+          <input type="hidden" id="brakeMediumMax" value="3.99" />
         </div>
       </section>
 
-      <section class="treatment-param-group">
-        <div class="treatment-param-group-title">Aceleração (Faixas de Acionamento)</div>
-
-        <div class="treatment-param-row">
-          <label for="accelIntenseMin">Intensa p/min</label>
-          <div class="treatment-param-inline">
-            <span class="treatment-param-text">≥</span>
-            <input type="number" id="accelIntenseMin" value="60.01" step="0.01" />
-            <span class="treatment-param-unit">%</span>
-          </div>
+      <section class="treatment-param-group treatment-param-group--accel-range">
+        <div class="treatment-param-group-title-row">
+          <div class="treatment-param-group-title">Aceleração (Faixas de Acionamento)</div>
+          <span class="treatment-param-pill treatment-param-pill--neutral">Range de 2 pontos</span>
         </div>
 
-        <div class="treatment-param-row">
-          <label for="accelMediumMin">Média p/min</label>
-          <div class="treatment-param-inline treatment-param-inline-double">
-            <span class="treatment-param-text">Entre</span>
-            <input type="number" id="accelMediumMin" value="30.00" step="0.01" />
-            <span class="treatment-param-text">e</span>
-            <input type="number" id="accelMediumMax" value="60" step="0.01" />
-            <span class="treatment-param-unit">%</span>
-          </div>
+        <div class="small treatment-param-helper">
+          Arraste os dois marcadores para definir o início e o fim da faixa média. O restante vira leve e intensa automaticamente.
         </div>
 
-        <div class="treatment-param-row">
-          <label for="accelLightMax">Leve p/min</label>
-          <div class="treatment-param-inline">
-            <span class="treatment-param-text">≤</span>
-            <input type="number" id="accelLightMax" value="30" step="0.01" />
-            <span class="treatment-param-unit">%</span>
+        <div class="accel-range-box">
+          <div class="accel-range-scale">
+            <span>0%</span>
+            <span>100%</span>
           </div>
+
+          <div class="accel-range-slider-wrap" id="accelRangeSlider">
+            <div class="accel-range-track"></div>
+
+            <div class="accel-range-segment accel-range-segment--light" id="accelSegLight"></div>
+            <div class="accel-range-segment accel-range-segment--medium" id="accelSegMedium"></div>
+            <div class="accel-range-segment accel-range-segment--intense" id="accelSegIntense"></div>
+
+            <button
+              type="button"
+              class="accel-range-handle accel-range-handle--start"
+              id="accelMediumMinHandle"
+              aria-label="Ajustar início da faixa média"
+            ></button>
+
+            <button
+              type="button"
+              class="accel-range-handle accel-range-handle--end"
+              id="accelMediumMaxHandle"
+              aria-label="Ajustar fim da faixa média"
+            ></button>
+          </div>
+
+          <div class="accel-range-summary">
+            <div class="accel-range-chip accel-range-chip--light">
+              <span class="accel-range-chip-label">Leve</span>
+              <strong>até <span id="accelLightMaxPreview">30</span>%</strong>
+            </div>
+
+            <div class="accel-range-chip accel-range-chip--medium">
+              <span class="accel-range-chip-label">Média</span>
+              <strong>
+                <span id="accelMediumMinPreview">30</span>% até <span id="accelMediumMaxPreview">60</span>%
+              </strong>
+            </div>
+
+            <div class="accel-range-chip accel-range-chip--intense">
+              <span class="accel-range-chip-label">Intensa</span>
+              <strong>acima de <span id="accelIntenseMinPreview">60,01</span>%</strong>
+            </div>
+          </div>
+
+          <div class="accel-range-values">
+            <div class="accel-range-value-card accel-range-value-card--derived">
+              <span class="accel-range-value-label">Leve até</span>
+              <div class="accel-range-derived-value">
+                <strong id="accelLightMaxValuePreview">30</strong>
+                <span>%</span>
+              </div>
+            </div>
+
+            <label class="accel-range-value-card">
+              <span class="accel-range-value-label">Início da média</span>
+              <div class="accel-range-value-input">
+                <input type="number" id="accelMediumMin" value="30.00" step="0.01" min="0" max="99.99" />
+                <span>%</span>
+              </div>
+            </label>
+
+            <label class="accel-range-value-card">
+              <span class="accel-range-value-label">Fim da média</span>
+              <div class="accel-range-value-input">
+                <input type="number" id="accelMediumMax" value="60.00" step="0.01" min="0.01" max="99.99" />
+                <span>%</span>
+              </div>
+            </label>
+
+            <div class="accel-range-value-card accel-range-value-card--derived">
+              <span class="accel-range-value-label">Início da intensa</span>
+              <div class="accel-range-derived-value">
+                <strong id="accelIntenseMinValuePreview">60,01</strong>
+                <span>%</span>
+              </div>
+            </div>
+          </div>
+
+          <input type="hidden" id="accelLightMax" value="30" />
+          <input type="hidden" id="accelIntenseMin" value="60.01" />
         </div>
       </section>
 
