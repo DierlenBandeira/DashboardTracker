@@ -1,5 +1,6 @@
 (function () {
   const REQUIRED_SHEET_NAME = "Mensagens";
+  const TRIPS_SHEET_NAME = "Horas de motor";
   const ANALYSIS_EXPORT_SUFFIX = "_tratado_analise.xlsx";
 
   const ANALYSIS_HEADERS = [
@@ -11,7 +12,8 @@
     "Frenagens",
     "Nota Rota",
     "Soma Pontuação",
-    "Nota Motorista"
+    "Nota Motorista",
+    "Viagem"
   ];
 
   const NUMERIC_COLUMNS = new Set([
@@ -76,6 +78,10 @@
     sheetName: "",
     baseHeaders: [],
     baseRows: [],
+    tripsSheetName: "",
+    tripsHeaders: [],
+    tripsRows: [],
+    trips: [],
     analysisHeaders: [],
     analysisRows: [],
     analysisApplied: false,
@@ -411,14 +417,69 @@
     };
   }
 
-  function findRequiredSheetName(workbook) {
-    if (!workbook || !Array.isArray(workbook.SheetNames)) return null;
-
-    if (workbook.SheetNames.includes(REQUIRED_SHEET_NAME)) {
-      return REQUIRED_SHEET_NAME;
+  function processTripsSheetRows(sheetRows) {
+    if (!Array.isArray(sheetRows) || !sheetRows.length) {
+      return {
+        headers: [],
+        rows: [],
+        trips: []
+      };
     }
 
-    const normalizedTarget = normalizeKey(REQUIRED_SHEET_NAME);
+    const treated = processWorkbookRows(sheetRows);
+    const headers = treated.headers;
+
+    const startHeader = headers.find((header) =>
+      ["inicio", "início"].includes(normalizeKey(header))
+    );
+    const endHeader = headers.find((header) =>
+      normalizeKey(header) === "fim"
+    );
+
+    if (!startHeader || !endHeader) {
+      return {
+        headers: treated.headers,
+        rows: treated.rows,
+        trips: []
+      };
+    }
+
+    const trips = [];
+
+    treated.rows.forEach((row) => {
+      const startDate = parseBrazilDateTime(row[startHeader]);
+      const endDate = parseBrazilDateTime(row[endHeader]);
+
+      if (!startDate || !endDate) return;
+      if (endDate.getTime() < startDate.getTime()) return;
+
+      trips.push({
+        id: `Viagem ${trips.length + 1}`,
+        start: startDate,
+        end: endDate
+      });
+    });
+
+    trips.sort((a, b) => a.start.getTime() - b.start.getTime());
+    return {
+      headers: treated.headers,
+      rows: treated.rows,
+      trips: trips.map((trip, index) => ({
+        id: `Viagem ${index + 1}`,
+        start: trip.start,
+        end: trip.end
+      }))
+    };
+  }
+
+  function findSheetName(workbook, desiredName) {
+    if (!workbook || !Array.isArray(workbook.SheetNames)) return null;
+
+    if (workbook.SheetNames.includes(desiredName)) {
+      return desiredName;
+    }
+
+    const normalizedTarget = normalizeKey(desiredName);
     return (
       workbook.SheetNames.find((name) => normalizeKey(name) === normalizedTarget) || null
     );
@@ -561,6 +622,24 @@
     return `${Math.round(percent)}%`;
   }
 
+  function findTripId(rowDate, trips) {
+    if (!(rowDate instanceof Date) || Number.isNaN(rowDate.getTime())) return "";
+    if (!Array.isArray(trips) || !trips.length) return "";
+
+    const rowTime = rowDate.getTime();
+
+    for (const trip of trips) {
+      const startTime = trip.start.getTime();
+      const endTime = trip.end.getTime();
+
+      if (rowTime >= startTime && rowTime <= endTime) {
+        return trip.id;
+      }
+    }
+
+    return "";
+  }
+
   function mergeHeadersWithAnalysis(headers) {
     const baseHeaders = headers.filter((header) => !ANALYSIS_HEADERS.includes(header));
     return [...baseHeaders, ...ANALYSIS_HEADERS];
@@ -616,7 +695,8 @@
         brakes: brakeLabel
       });
       const driverScore = calculateDriverScore(sumScore, noteRoute);
-      
+      const tripId = findTripId(currentDate, state.trips);
+
       previousBrakeActive = brakeActive;
 
       return {
@@ -629,7 +709,8 @@
         "Frenagens": brakeLabel,
         "Nota Rota": noteRoute,
         "Soma Pontuação": sumScore,
-        "Nota Motorista": driverScore
+        "Nota Motorista": driverScore,
+        "Viagem": tripId
       };
     });
   }
@@ -739,6 +820,10 @@
     state.sheetName = "";
     state.baseHeaders = [];
     state.baseRows = [];
+    state.tripsSheetName = "";
+    state.tripsHeaders = [];
+    state.tripsRows = [];
+    state.trips = [];
     state.analysisHeaders = [];
     state.analysisRows = [];
     state.analysisApplied = false;
@@ -756,7 +841,7 @@
       cellDates: true
     });
 
-    const targetSheetName = findRequiredSheetName(workbook);
+    const targetSheetName = findSheetName(workbook, REQUIRED_SHEET_NAME);
     if (!targetSheetName) {
       throw new Error('A planilha obrigatória "Mensagens" não foi encontrada no arquivo.');
     }
@@ -770,6 +855,29 @@
 
     const treated = processWorkbookRows(rows);
 
+    const tripsSheetName = findSheetName(workbook, TRIPS_SHEET_NAME);
+    let tripsHeaders = [];
+    let tripsRows = [];
+    let trips = [];
+
+    if (tripsSheetName) {
+      const tripsSheet = workbook.Sheets[tripsSheetName];
+      const rawTripsRows = XLSX.utils.sheet_to_json(tripsSheet, {
+        header: 1,
+        defval: "",
+        raw: true
+      });
+
+      try {
+        const treatedTrips = processTripsSheetRows(rawTripsRows);
+        tripsHeaders = treatedTrips.headers;
+        tripsRows = treatedTrips.rows;
+        trips = treatedTrips.trips;
+      } catch (error) {
+        console.warn("Step 1: falha ao tratar aba Horas de motor", error);
+      }
+    }
+
     if (token !== state.parseToken) {
       return;
     }
@@ -779,6 +887,10 @@
     state.sheetName = targetSheetName;
     state.baseHeaders = treated.headers;
     state.baseRows = treated.rows;
+    state.tripsSheetName = tripsSheetName || "";
+    state.tripsHeaders = tripsHeaders;
+    state.tripsRows = tripsRows;
+    state.trips = trips;
     state.analysisHeaders = [];
     state.analysisRows = [];
     state.analysisApplied = false;
@@ -801,7 +913,8 @@
     els.fileName.textContent = state.originalFileName || "-";
     els.rowCount.textContent = String(state.analysisRows.length);
     els.columnCount.textContent = String(state.analysisHeaders.length);
-    els.meta.textContent = `Planilha lida: ${state.sheetName}. Arquivo final: ${state.exportFileName}`;
+    els.meta.textContent =
+      `Planilha lida: ${state.sheetName}. Viagens encontradas: ${state.trips.length}. Arquivo final: ${state.exportFileName}`;
 
     updateBadge("Análise step 1 aplicada", "ok");
     setButtonState();
@@ -824,6 +937,17 @@
 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Tratado Analise");
+
+    if (state.tripsSheetName && state.tripsHeaders.length && state.tripsRows.length) {
+      const tripsExportRows = buildExportRows(state.tripsHeaders, state.tripsRows);
+      const tripsWorksheet = XLSX.utils.json_to_sheet(tripsExportRows, {
+        header: state.tripsHeaders
+      });
+
+      tripsWorksheet["!cols"] = autosizeColumns(tripsExportRows, state.tripsHeaders);
+      XLSX.utils.book_append_sheet(workbook, tripsWorksheet, state.tripsSheetName);
+    }
+
     XLSX.writeFile(workbook, state.exportFileName);
   }
 
@@ -894,5 +1018,4 @@
       scoreSpeedTransitLabel(speedTransit)
     );
   }
-
 })();
