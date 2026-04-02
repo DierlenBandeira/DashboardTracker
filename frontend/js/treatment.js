@@ -23,6 +23,33 @@
     return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
   }
 
+  function previewApiBody(rawText) {
+    return String(rawText ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 180);
+  }
+
+  async function parseApiResponse(response) {
+    const rawText = await response.text();
+    const contentType = (response.headers.get("Content-Type") || "").toLowerCase();
+    const bodyPreview = previewApiBody(rawText);
+
+    if (!contentType.includes("application/json")) {
+      throw new Error(
+        `Resposta da API não é JSON (HTTP ${response.status}). Retorno: ${bodyPreview || "[vazio]"}`
+      );
+    }
+
+    try {
+      return JSON.parse(rawText);
+    } catch (error) {
+      throw new Error(
+        `JSON inválido retornado pela API (HTTP ${response.status}). Retorno: ${bodyPreview || "[vazio]"}`
+      );
+    }
+  }
+
   const els = {
     input: document.getElementById("treatmentFileInput"),
     btnSelect: document.getElementById("btnSelectFile"),
@@ -228,7 +255,7 @@
       body: file
     });
 
-    const result = await response.json();
+    const result = await parseApiResponse(response);
 
     if (!response.ok || !result.ok || !result.job_id) {
       throw new Error(result?.error || "Erro ao criar job de processamento.");
@@ -241,7 +268,7 @@
     const response = await fetch(apiUrl(`/treatment_status?job_id=${encodeURIComponent(jobId)}`), {
       cache: "no-store"
     });
-    const result = await response.json();
+    const result = await parseApiResponse(response);
 
     if (!response.ok || !result.ok) {
       throw new Error(result?.error || "Erro ao consultar status do processamento.");
@@ -421,7 +448,7 @@
         let message = "NÃ£o foi possÃ­vel baixar o arquivo processado.";
 
         try {
-          const errorPayload = await response.json();
+          const errorPayload = await parseApiResponse(response);
           message = errorPayload?.error || message;
         } catch (error) {
           console.warn("Treatment: resposta de erro do download nÃ£o era JSON.", error);
