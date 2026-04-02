@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Tratamento de Dados</title>
   <link rel="stylesheet" href="/dashboard.css" />
-  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 </head>
 <body class="treatment-page">
   <div id="sidebar-root"></div>
@@ -52,7 +51,8 @@
           visualize a tabela e exporte a versão tratada.
         </div>
         <div class="treatment-status-note">
-          O arquivo final será baixado com o nome original + <span class="treatment-meta-strong">_tratado</span>.
+          O arquivo final será baixado com o nome original + <span class="treatment-meta-strong">_tratado</span>
+          ou <span class="treatment-meta-strong">_tratado_analise</span>, conforme o fluxo escolhido.
         </div>
       </div>
 
@@ -138,6 +138,5 @@
  
   <script src="/js/sidebar.js"></script>
   <script src="/js/treatment.js"></script>
-  <script src="/js/tratamento-analise-step1.js"></script>
 </body>
 </html>

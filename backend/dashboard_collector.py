@@ -1,14 +1,19 @@
+import io
 import json
 import mimetypes
 import os
 import time
 import threading
+import uuid
+from bisect import bisect_left
 from collections import deque
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote, parse_qs
 from pathlib import Path
 
 import requests
+from openpyxl import load_workbook, Workbook
 
 # -----------------------------
 # Config
@@ -24,6 +29,16 @@ LIVE_BUFFER_SIZE = int(os.getenv("LIVE_BUFFER_SIZE", "720"))
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
+TEMP_TREATMENT_DIR = BASE_DIR / "_treatment_jobs"
+TEMP_TREATMENT_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_TREATMENT_INBOX_DIR = TEMP_TREATMENT_DIR / "inbox"
+TEMP_TREATMENT_INBOX_DIR.mkdir(parents=True, exist_ok=True)
+
+TREATMENT_JOBS_LOCK = threading.Lock()
+TREATMENT_JOBS = {}
+TREATMENT_STATUS_LOCK = threading.Lock()
+TREATMENT_STATUS = {}
+PREVIEW_LIMIT = 200
 
 HTML_PATH = FRONTEND_DIR / "index.html"
 CSS_PATH = FRONTEND_DIR / "dashboard.css"
@@ -39,7 +54,7 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_METHODS = "GET, POST, OPTIONS"
-CORS_ALLOW_HEADERS = "Content-Type"
+CORS_ALLOW_HEADERS = "Content-Type, X-Filename, X-Treatment-Config"
 
 SENSOR_IDX = {
     "velocidade": 8,
@@ -355,6 +370,1226 @@ def get_allowed_origin(request_handler) -> str:
     if request_origin in CORS_ALLOWED_ORIGINS:
         return request_origin
     return "null"
+
+
+# -----------------------------
+# Treatment helpers
+# -----------------------------
+REQUIRED_TREATMENT_SHEET = "Mensagens"
+TRIPS_TREATMENT_SHEET = "Horas de motor"
+NUMERIC_COLUMNS_TREATMENT = {
+    "tensao", "bateria", "temperatura ambiente", "odometro",
+    "pressao p1e1", "temperatura p1e1", "pressao p2e1", "temperatura p2e1",
+    "pressao p1e2", "temperatura p1e2", "pressao p2e2", "temperatura p2e2",
+    "pressao p3e2", "temperatura p3e2", "pressao p4e2", "temperatura p4e2",
+    "pressao p1e3", "temperatura p1e3", "pressao p2e3", "temperatura p2e3",
+    "rpm", "carga do motor", "temperatura do motor", "velocidade", "velocidade_2",
+    "rpm max", "acelerador", "nivel de combustivel", "consumo instantaneo",
+    "consumido", "arla", "volante", "inercia", "aceleracao", "desaceleracao",
+    "peso dianteiro", "pesoraseiro", "pesootal", "altitude"
+}
+
+ROUND_2_COLUMNS_TREATMENT = {
+    "tensao", "bateria", "temperatura ambiente", "velocidade", "velocidade_2",
+    "rpm max", "carga do motor", "acelerador", "nivel de combustivel",
+    "inercia", "aceleracao"
+}
+
+ANALYSIS_HEADERS_TREATMENT = [
+    "dia-mês",
+    "Faixa Verde",
+    "Trânsito (Velocidade)",
+    "Trânsito (RPM)",
+    "Aceleração",
+    "Frenagens",
+    "Nota Rota",
+    "Soma Pontuação",
+    "Nota Motorista",
+    "Viagem",
+]
+
+
+def cleanup_old_treatment_jobs(max_age_seconds: int = 3600):
+    now = time.time()
+    to_delete = []
+
+    with TREATMENT_JOBS_LOCK:
+        for job_id, meta in list(TREATMENT_JOBS.items()):
+            created_at = float(meta.get("created_at", 0))
+            if now - created_at > max_age_seconds:
+                to_delete.append((job_id, meta.get("path")))
+
+        for job_id, _ in to_delete:
+            TREATMENT_JOBS.pop(job_id, None)
+
+    for _, path in to_delete:
+        try:
+            if path:
+                Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    status_delete = []
+    with TREATMENT_STATUS_LOCK:
+        for job_id, meta in list(TREATMENT_STATUS.items()):
+            created_at = float(meta.get("created_at", 0))
+            if now - created_at > max_age_seconds:
+                status_delete.append(meta)
+                TREATMENT_STATUS.pop(job_id, None)
+
+    for meta in status_delete:
+        for key in ("input_path",):
+            try:
+                path = meta.get(key)
+                if path:
+                    Path(path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def register_treatment_job(file_path: Path, download_name: str, job_id: str | None = None):
+    cleanup_old_treatment_jobs()
+    job_id = job_id or uuid.uuid4().hex
+    with TREATMENT_JOBS_LOCK:
+        TREATMENT_JOBS[job_id] = {
+            "path": str(file_path),
+            "download_name": download_name,
+            "created_at": time.time(),
+        }
+    return job_id
+
+
+def get_treatment_job(job_id: str):
+    cleanup_old_treatment_jobs()
+    with TREATMENT_JOBS_LOCK:
+        return TREATMENT_JOBS.get(job_id)
+
+
+def create_treatment_status(job_id: str, kind: str, filename: str, input_path: Path):
+    cleanup_old_treatment_jobs()
+    now = time.time()
+    with TREATMENT_STATUS_LOCK:
+        TREATMENT_STATUS[job_id] = {
+            "job_id": job_id,
+            "kind": kind,
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+            "filename": filename,
+            "input_path": str(input_path),
+            "progress": {
+                "phase": "upload_received",
+                "message": "Upload concluído. Preparando processamento...",
+                "current": None,
+                "total": None,
+            },
+            "result": None,
+            "error": None,
+        }
+
+
+def update_treatment_status(job_id: str, **fields):
+    with TREATMENT_STATUS_LOCK:
+        current = TREATMENT_STATUS.get(job_id)
+        if not current:
+            return None
+        current.update(fields)
+        current["updated_at"] = time.time()
+        return dict(current)
+
+
+def update_treatment_progress(job_id: str, phase: str, message: str, current=None, total=None, status: str | None = None):
+    payload = {
+        "progress": {
+            "phase": phase,
+            "message": message,
+            "current": current,
+            "total": total,
+        }
+    }
+    if status:
+        payload["status"] = status
+    return update_treatment_status(job_id, **payload)
+
+
+def get_treatment_status(job_id: str):
+    cleanup_old_treatment_jobs()
+    with TREATMENT_STATUS_LOCK:
+        status = TREATMENT_STATUS.get(job_id)
+        return dict(status) if status else None
+
+
+def save_treatment_input_file(file_bytes: bytes, filename: str, job_id: str):
+    suffix = Path(filename or "arquivo.xlsx").suffix or ".xlsx"
+    input_path = TEMP_TREATMENT_INBOX_DIR / f"{job_id}{suffix}"
+    input_path.write_bytes(file_bytes)
+    return input_path
+
+
+def normalize_spaces_treatment(value):
+    return " ".join(str("" if value is None else value).replace("\u00A0", " ").split()).strip()
+
+
+def normalize_header_treatment(value, fallback_index):
+    text = normalize_spaces_treatment(value).replace("*", "")
+    return text or f"Coluna_{fallback_index + 1}"
+
+
+def normalize_key_treatment(value):
+    text = normalize_spaces_treatment(value).replace("*", "").lower()
+    replacements = {
+        "á": "a", "à": "a", "â": "a", "ã": "a",
+        "é": "e", "ê": "e",
+        "í": "i",
+        "ó": "o", "ô": "o", "õ": "o",
+        "ú": "u",
+        "ç": "c",
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    return text
+
+
+def make_unique_headers_treatment(headers):
+    seen = {}
+    out = []
+    for header in headers:
+        count = seen.get(header, 0) + 1
+        seen[header] = count
+        out.append(header if count == 1 else f"{header}_{count}")
+    return out
+
+
+def is_row_empty_treatment(row):
+    if not isinstance(row, (list, tuple)):
+        return True
+    return all(normalize_spaces_treatment(cell) == "" for cell in row)
+
+
+def worksheet_to_rows(ws):
+    rows = []
+    for row in ws.iter_rows(values_only=True):
+        rows.append(list(row))
+    return rows
+
+
+def find_header_in_worksheet_treatment(ws):
+    first_non_empty = None
+
+    for idx, row in enumerate(ws.iter_rows(values_only=True)):
+        row_values = list(row)
+        if isinstance(row_values, list) and any(normalize_key_treatment(cell) == "hora" for cell in row_values):
+            return idx, row_values
+
+        if first_non_empty is None and not is_row_empty_treatment(row_values):
+            first_non_empty = (idx, row_values)
+
+    return first_non_empty or (-1, [])
+
+
+def build_output_headers_treatment(headers, key_map):
+    output_headers = []
+
+    for header, key in zip(headers, key_map):
+        if key == "agrupamento":
+            continue
+
+        output_headers.append(header)
+        if key == "hora":
+            output_headers.append("Hora Unix")
+
+    output_headers.append("Linha Origem")
+    return output_headers
+
+
+def normalize_cell_for_treatment(raw_value, key):
+    if key == "hora":
+        parsed = parse_brazil_datetime_treatment(raw_value)
+        return (
+            format_datetime_br_treatment(parsed) if parsed else normalize_spaces_treatment(raw_value),
+            int(parsed.timestamp()) if parsed else "",
+        )
+
+    if key in NUMERIC_COLUMNS_TREATMENT:
+        numeric = to_number_maybe_treatment(raw_value)
+        if isinstance(numeric, (int, float)):
+            return round_if_needed_treatment(numeric, key)
+        return numeric
+
+    if isinstance(raw_value, datetime):
+        return format_datetime_br_treatment(raw_value)
+
+    return normalize_spaces_treatment(raw_value)
+
+
+def transform_row_values_treatment(row, headers, key_map, source_line_number):
+    output_values = []
+    has_any_data = False
+
+    for col_index, key in enumerate(key_map):
+        raw_value = row[col_index] if col_index < len(row) else None
+        header = headers[col_index]
+
+        if key == "agrupamento":
+            continue
+
+        if key == "hora":
+            hour_value, hour_unix = normalize_cell_for_treatment(raw_value, key)
+            output_values.append(hour_value)
+            output_values.append(hour_unix)
+            if hour_value != "" or hour_unix != "":
+                has_any_data = True
+            continue
+
+        cell_value = normalize_cell_for_treatment(raw_value, key)
+        output_values.append(cell_value)
+        if cell_value != "":
+            has_any_data = True
+
+    if not has_any_data:
+        return None
+
+    output_values.append(source_line_number)
+    return output_values
+
+
+def make_preview_row_treatment(headers, values):
+    return {header: value for header, value in zip(headers, values)}
+
+
+def prepare_treatment_stream(ws):
+    header_index, header_row = find_header_in_worksheet_treatment(ws)
+    if header_index < 0:
+        raise ValueError("Não foi possível localizar o cabeçalho.")
+
+    raw_headers = [normalize_header_treatment(value, idx) for idx, value in enumerate(header_row or [])]
+    headers = make_unique_headers_treatment(raw_headers)
+    key_map = [normalize_key_treatment(header) for header in headers]
+    output_headers = build_output_headers_treatment(headers, key_map)
+
+    return {
+        "header_index": header_index,
+        "headers": headers,
+        "key_map": key_map,
+        "output_headers": output_headers,
+    }
+
+
+def iter_processed_rows_treatment_from_worksheet(ws, stream_meta):
+    header_index = stream_meta["header_index"]
+    headers = stream_meta["headers"]
+    key_map = stream_meta["key_map"]
+
+    for row_index, row in enumerate(ws.iter_rows(values_only=True)):
+        if row_index <= header_index:
+            continue
+        if is_row_empty_treatment(row):
+            continue
+
+        transformed = transform_row_values_treatment(
+            row=row,
+            headers=headers,
+            key_map=key_map,
+            source_line_number=row_index + 1,
+        )
+        if transformed is None:
+            continue
+
+        yield transformed
+
+
+def excel_serial_to_datetime_treatment(value):
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        base = datetime(1899, 12, 30)
+        return base + timedelta(days=float(value))
+    except Exception:
+        return None
+
+
+def parse_brazil_datetime_treatment(value):
+    if value in (None, ""):
+        return None
+
+    if isinstance(value, datetime):
+        return value
+
+    if isinstance(value, (int, float)):
+        return excel_serial_to_datetime_treatment(value)
+
+    text = normalize_spaces_treatment(value)
+    if not text:
+        return None
+
+    for fmt in (
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%y %H:%M:%S",
+        "%d/%m/%y %H:%M",
+        "%d/%m/%Y",
+        "%d/%m/%y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            pass
+
+    return None
+
+
+def format_datetime_br_treatment(value):
+    if not isinstance(value, datetime):
+        return ""
+    return value.strftime("%d/%m/%Y %H:%M:%S")
+
+
+def token_to_number_treatment(token):
+    if token is None:
+        return None
+
+    value = str(token).replace("−", "-").strip()
+    if not value:
+        return None
+
+    has_dot = "." in value
+    has_comma = "," in value
+
+    if has_dot and has_comma:
+        if value.rfind(".") > value.rfind(","):
+            value = value.replace(",", "")
+        else:
+            value = value.replace(".", "").replace(",", ".")
+    elif has_comma:
+        if value.count(",") > 1:
+            last = value.rfind(",")
+            value = value[:last].replace(",", "") + "." + value[last + 1:]
+        else:
+            value = value.replace(",", ".")
+    elif has_dot:
+        if value.count(".") > 1:
+            last = value.rfind(".")
+            value = value[:last].replace(".", "") + "." + value[last + 1:]
+
+    try:
+        num = float(value)
+        return num
+    except Exception:
+        return None
+
+
+def to_number_maybe_treatment(value):
+    if value in (None, ""):
+        return ""
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+
+    original = normalize_spaces_treatment(value)
+    if not original:
+        return ""
+
+    import re
+    candidates = re.findall(r"-?\d[\d.,]*", original)
+    if not candidates:
+        return original
+
+    candidates = sorted(
+        candidates,
+        key=lambda x: (len([d for d in x if d.isdigit()]), len(x)),
+        reverse=True,
+    )
+    num = token_to_number_treatment(candidates[0])
+    return num if num is not None else original
+
+
+def round_if_needed_treatment(value, key):
+    if not isinstance(value, (int, float)):
+        return value
+    if key not in ROUND_2_COLUMNS_TREATMENT:
+        return value
+    return round(float(value), 2)
+
+
+def find_header_index_treatment(sheet_rows):
+    for idx, row in enumerate(sheet_rows):
+        if isinstance(row, (list, tuple)) and any(normalize_key_treatment(cell) == "hora" for cell in row):
+            return idx
+
+    for idx, row in enumerate(sheet_rows):
+        if isinstance(row, (list, tuple)) and not is_row_empty_treatment(row):
+            return idx
+
+    return -1
+
+
+def process_sheet_rows_treatment(sheet_rows):
+    if not sheet_rows:
+        raise ValueError("A planilha não possui dados válidos.")
+
+    header_index = find_header_index_treatment(sheet_rows)
+    if header_index < 0:
+        raise ValueError("Não foi possível localizar o cabeçalho.")
+
+    header_row = sheet_rows[header_index] or []
+    raw_headers = [normalize_header_treatment(value, idx) for idx, value in enumerate(header_row)]
+    headers = make_unique_headers_treatment(raw_headers)
+    key_map = [normalize_key_treatment(header) for header in headers]
+
+    data_rows = [row for row in sheet_rows[header_index + 1:] if not is_row_empty_treatment(row)]
+    treated_rows = []
+
+    for row_index, row in enumerate(data_rows):
+        obj = {}
+        has_any_data = False
+
+        for col_index, header in enumerate(headers):
+            raw_value = row[col_index] if col_index < len(row) else None
+            key = key_map[col_index]
+
+            if key == "agrupamento":
+                continue
+
+            if key == "hora":
+                parsed = parse_brazil_datetime_treatment(raw_value)
+                obj[header] = format_datetime_br_treatment(parsed) if parsed else normalize_spaces_treatment(raw_value)
+                obj["Hora Unix"] = int(parsed.timestamp()) if parsed else ""
+                if obj[header] != "" or obj["Hora Unix"] != "":
+                    has_any_data = True
+                continue
+
+            if key in NUMERIC_COLUMNS_TREATMENT:
+                numeric = to_number_maybe_treatment(raw_value)
+                obj[header] = round_if_needed_treatment(numeric, key) if isinstance(numeric, (int, float)) else numeric
+                if obj[header] != "":
+                    has_any_data = True
+                continue
+
+            if isinstance(raw_value, datetime):
+                obj[header] = format_datetime_br_treatment(raw_value)
+            else:
+                obj[header] = normalize_spaces_treatment(raw_value)
+
+            if obj[header] != "":
+                has_any_data = True
+
+        if not has_any_data:
+            continue
+
+        obj["Linha Origem"] = header_index + row_index + 2
+        treated_rows.append(obj)
+
+    if not treated_rows:
+        raise ValueError("Nenhuma linha válida foi encontrada para tratamento.")
+
+    return {
+        "headers": list(treated_rows[0].keys()),
+        "rows": treated_rows,
+    }
+
+
+def find_sheet_name_treatment(workbook, desired_name):
+    if desired_name in workbook.sheetnames:
+        return desired_name
+
+    normalized_target = normalize_key_treatment(desired_name)
+    for name in workbook.sheetnames:
+        if normalize_key_treatment(name) == normalized_target:
+            return name
+
+    return None
+
+
+def process_trips_sheet_rows_treatment(sheet_rows):
+    if not sheet_rows:
+        return {"headers": [], "rows": [], "trips": []}
+
+    treated = process_sheet_rows_treatment(sheet_rows)
+    headers = treated["headers"]
+
+    start_header = next((h for h in headers if normalize_key_treatment(h) in {"inicio", "início"}), None)
+    end_header = next((h for h in headers if normalize_key_treatment(h) == "fim"), None)
+
+    if not start_header or not end_header:
+        return {"headers": treated["headers"], "rows": treated["rows"], "trips": []}
+
+    trips = []
+    for row in treated["rows"]:
+        start_date = parse_brazil_datetime_treatment(row.get(start_header))
+        end_date = parse_brazil_datetime_treatment(row.get(end_header))
+        if not start_date or not end_date:
+            continue
+        if end_date < start_date:
+            continue
+        trips.append({"start": start_date, "end": end_date})
+
+    trips.sort(key=lambda item: item["start"])
+
+    return {
+        "headers": treated["headers"],
+        "rows": treated["rows"],
+        "trips": [
+            {"id": f"Viagem {idx + 1}", "start": item["start"], "end": item["end"]}
+            for idx, item in enumerate(trips)
+        ],
+    }
+
+
+def get_preview_rows(rows):
+    return rows[:PREVIEW_LIMIT]
+
+
+def build_treatment_export_name(filename):
+    if not filename:
+        return "arquivo_tratado.xlsx"
+    lower = filename.lower()
+    if lower.endswith(".xlsx"):
+        return filename[:-5] + "_tratado.xlsx"
+    if lower.endswith(".xls"):
+        return filename[:-4] + "_tratado.xlsx"
+    return filename + "_tratado.xlsx"
+
+
+def build_analysis_export_name(filename):
+    if not filename:
+        return "arquivo_tratado_analise.xlsx"
+    lower = filename.lower()
+    if lower.endswith(".xlsx"):
+        return filename[:-5] + "_tratado_analise.xlsx"
+    if lower.endswith(".xls"):
+        return filename[:-4] + "_tratado_analise.xlsx"
+    return filename + "_tratado_analise.xlsx"
+
+
+def write_result_workbook(output_path: Path, sheets: list[tuple[str, list[str], list[dict]]]):
+    wb = Workbook(write_only=True)
+    first = True
+
+    for sheet_name, headers, rows in sheets:
+        ws = wb.create_sheet(title=(sheet_name or "Sheet1")[:31])
+        ws.append(headers)
+        for row in rows:
+            ws.append([row.get(header, "") for header in headers])
+
+        if first and "Sheet" in wb.sheetnames:
+            default_ws = wb["Sheet"]
+            wb.remove(default_ws)
+            first = False
+
+    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+        wb.remove(wb["Sheet"])
+
+    wb.save(output_path)
+
+
+def score_intensity_label_treatment(value):
+    if value == "Leve":
+        return 2
+    if value in {"Médio", "Média"}:
+        return 1
+    if value in {"Intenso", "Intensa"}:
+        return 0
+    return 0
+
+
+def score_green_band_treatment(value):
+    return 2 if value == "Faixa Verde" else 0
+
+
+def calculate_sum_score_treatment(green_band, speed_transit, rpm_transit, acceleration, brakes):
+    return (
+        score_intensity_label_treatment(rpm_transit)
+        + score_intensity_label_treatment(acceleration)
+        + score_intensity_label_treatment(brakes)
+        + score_green_band_treatment(green_band)
+        + score_intensity_label_treatment(speed_transit)
+    )
+
+
+def get_route_score_treatment(value):
+    if value == "Intenso":
+        return 10
+    if value in {"Médio", "Média"}:
+        return 6
+    if value == "Leve":
+        return 0
+    return ""
+
+
+def calculate_driver_score_treatment(sum_score, route_score):
+    if not isinstance(sum_score, (int, float)):
+        return ""
+    if not isinstance(route_score, (int, float)) or route_score == 0:
+        return "100%"
+    return f"{round((sum_score / route_score) * 100)}%"
+
+
+def classify_green_band_treatment(rpm_value, config):
+    if not isinstance(rpm_value, (int, float)):
+        return ""
+    return "Faixa Verde" if config["bestRpmMin"] <= rpm_value <= config["bestRpmMax"] else "Fora da Faixa"
+
+
+def classify_speed_transit_treatment(speed_value, config):
+    if not isinstance(speed_value, (int, float)):
+        return ""
+    if speed_value <= config["speedLowMax"]:
+        return "Intenso"
+    if speed_value <= config["speedMediumMax"]:
+        return "Médio"
+    return "Leve"
+
+
+def classify_rpm_transit_treatment(rpm_value, config):
+    if not isinstance(rpm_value, (int, float)):
+        return ""
+    if rpm_value < config["rpmUsefulStart"] or rpm_value > config["rpmUsefulEnd"]:
+        return "Intenso"
+    if rpm_value < config["rpmLightStart"]:
+        return "Médio"
+    return "Leve"
+
+
+def classify_acceleration_treatment(accel_value, config):
+    if not isinstance(accel_value, (int, float)):
+        return ""
+    if accel_value <= config["accelLightMax"]:
+        return "Leve"
+    if accel_value <= config["accelMediumMax"]:
+        return "Média"
+    return "Intensa"
+
+
+def classify_brake_treatment(brake_count, config):
+    if not isinstance(brake_count, (int, float)):
+        return ""
+    if brake_count < config["brakeMediumMin"]:
+        return "Leve"
+    if brake_count < config["brakeIntenseMin"]:
+        return "Média"
+    return "Intensa"
+
+
+def is_brake_activated_treatment(value):
+    if value in (None, ""):
+        return False
+    if isinstance(value, (int, float)):
+        return value > 0
+    normalized = normalize_key_treatment(value)
+    if normalized in {"sim", "true", "on", "ativo", "acionado", "pressed"}:
+        return True
+    if normalized in {"nao", "não", "false", "off", "inativo", "desacionado"}:
+        return False
+    numeric = token_to_number_treatment(normalized)
+    return (numeric or 0) > 0 if numeric is not None else False
+
+
+def find_header_by_aliases_treatment(headers, aliases):
+    aliases_norm = {normalize_key_treatment(alias) for alias in aliases}
+    for header in headers:
+        if normalize_key_treatment(header) in aliases_norm:
+            return header
+    return None
+
+
+def extract_numeric_from_row_treatment(row, header_names):
+    for header_name in header_names:
+        if not header_name:
+            continue
+        parsed = to_number_maybe_treatment(row.get(header_name))
+        if isinstance(parsed, (int, float)):
+            return parsed
+    return None
+
+
+def get_row_date_treatment(row, hour_header, hour_unix_header):
+    if hour_unix_header:
+        unix = extract_numeric_from_row_treatment(row, [hour_unix_header])
+        if isinstance(unix, (int, float)):
+            try:
+                return datetime.fromtimestamp(unix)
+            except Exception:
+                pass
+
+    if hour_header:
+        return parse_brazil_datetime_treatment(row.get(hour_header))
+
+    return None
+
+
+def format_day_month_treatment(date):
+    if not isinstance(date, datetime):
+        return ""
+    return date.strftime("%d/%m")
+
+
+def find_trip_id_treatment(row_date, trips):
+    if not isinstance(row_date, datetime) or not trips:
+        return ""
+
+    row_ts = row_date.timestamp()
+    trip_starts = [trip["start"].timestamp() for trip in trips]
+    idx = bisect_left(trip_starts, row_ts)
+    candidates = []
+
+    if idx < len(trips):
+        candidates.append(trips[idx])
+    if idx > 0:
+        candidates.append(trips[idx - 1])
+
+    for trip in candidates:
+        if trip["start"].timestamp() <= row_ts <= trip["end"].timestamp():
+            return trip["id"]
+    return ""
+
+
+def resolve_header_index_treatment(headers, aliases):
+    header = find_header_by_aliases_treatment(headers, aliases)
+    if not header:
+        return None
+    try:
+        return headers.index(header)
+    except ValueError:
+        return None
+
+
+def get_numeric_from_indexed_row_treatment(values, idx):
+    if idx is None or idx >= len(values):
+        return None
+    parsed = to_number_maybe_treatment(values[idx])
+    return parsed if isinstance(parsed, (int, float)) else None
+
+
+def get_datetime_from_indexed_row_treatment(values, hour_idx, hour_unix_idx):
+    if hour_unix_idx is not None and hour_unix_idx < len(values):
+        unix = get_numeric_from_indexed_row_treatment(values, hour_unix_idx)
+        if isinstance(unix, (int, float)):
+            try:
+                return datetime.fromtimestamp(unix)
+            except Exception:
+                pass
+
+    if hour_idx is not None and hour_idx < len(values):
+        return parse_brazil_datetime_treatment(values[hour_idx])
+
+    return None
+
+
+def build_trip_search_index_treatment(trips):
+    indexed_trips = []
+
+    for trip in trips or []:
+        start = trip.get("start")
+        end = trip.get("end")
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            continue
+        indexed_trips.append({
+            "id": trip.get("id", ""),
+            "start_ts": start.timestamp(),
+            "end_ts": end.timestamp(),
+        })
+
+    trip_starts = [trip["start_ts"] for trip in indexed_trips]
+    return indexed_trips, trip_starts
+
+
+def find_trip_id_with_index_treatment(row_date, indexed_trips, trip_starts):
+    if not isinstance(row_date, datetime) or not indexed_trips:
+        return ""
+
+    row_ts = row_date.timestamp()
+    idx = bisect_left(trip_starts, row_ts)
+
+    if idx < len(indexed_trips):
+        trip = indexed_trips[idx]
+        if trip["start_ts"] <= row_ts <= trip["end_ts"]:
+            return trip["id"]
+
+    if idx > 0:
+        trip = indexed_trips[idx - 1]
+        if trip["start_ts"] <= row_ts <= trip["end_ts"]:
+            return trip["id"]
+
+    return ""
+
+
+def build_analysis_rows_treatment(rows, headers, trips, config):
+    hour_header = find_header_by_aliases_treatment(headers, ["Hora"])
+    hour_unix_header = find_header_by_aliases_treatment(headers, ["Hora Unix", "HoraUnix"])
+    rpm_header = find_header_by_aliases_treatment(headers, ["RPM"])
+    speed_header = find_header_by_aliases_treatment(headers, ["Velocidade_2", "Velocidade"])
+    accel_header = find_header_by_aliases_treatment(headers, ["Acelerador"])
+    brake_header = find_header_by_aliases_treatment(headers, ["Freio"])
+
+    recent_brake_events = []
+    previous_brake_active = False
+    analysis_rows = []
+
+    for row in rows:
+        current_date = get_row_date_treatment(row, hour_header, hour_unix_header)
+        current_ts = current_date.timestamp() if current_date else None
+        rpm_value = extract_numeric_from_row_treatment(row, [rpm_header])
+        speed_value = extract_numeric_from_row_treatment(row, [speed_header])
+        accel_value = extract_numeric_from_row_treatment(row, [accel_header])
+        brake_active = is_brake_activated_treatment(row.get(brake_header)) if brake_header else False
+
+        if current_ts is not None:
+            recent_brake_events = [x for x in recent_brake_events if x >= current_ts - 60]
+            if brake_active and not previous_brake_active:
+                recent_brake_events.append(current_ts)
+
+        speed_transit = classify_speed_transit_treatment(speed_value, config)
+        note_route = get_route_score_treatment(speed_transit)
+        brake_count = len(recent_brake_events) if current_ts is not None and brake_header else None
+        brake_label = classify_brake_treatment(brake_count, config)
+        green_band = classify_green_band_treatment(rpm_value, config)
+        rpm_transit = classify_rpm_transit_treatment(rpm_value, config)
+        acceleration_label = classify_acceleration_treatment(accel_value, config)
+        sum_score = calculate_sum_score_treatment(
+            green_band=green_band,
+            speed_transit=speed_transit,
+            rpm_transit=rpm_transit,
+            acceleration=acceleration_label,
+            brakes=brake_label,
+        )
+        driver_score = calculate_driver_score_treatment(sum_score, note_route)
+        trip_id = find_trip_id_treatment(current_date, trips)
+
+        previous_brake_active = brake_active
+
+        merged = dict(row)
+        merged.update({
+            "dia-mês": format_day_month_treatment(current_date),
+            "Faixa Verde": green_band,
+            "Trânsito (Velocidade)": speed_transit,
+            "Trânsito (RPM)": rpm_transit,
+            "Aceleração": acceleration_label,
+            "Frenagens": brake_label,
+            "Nota Rota": note_route,
+            "Soma Pontuação": sum_score,
+            "Nota Motorista": driver_score,
+            "Viagem": trip_id,
+        })
+        analysis_rows.append(merged)
+
+    base_headers = [h for h in headers if h not in ANALYSIS_HEADERS_TREATMENT]
+    analysis_headers = base_headers + ANALYSIS_HEADERS_TREATMENT
+    return analysis_headers, analysis_rows
+
+
+def process_treatment_file_bytes(file_bytes: bytes, filename: str, job_id: str | None = None, progress_cb=None):
+    started_at = time.perf_counter()
+    if progress_cb:
+        progress_cb("opening_workbook", "Abrindo planilha...")
+    wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    workbook_opened_at = time.perf_counter()
+    sheet_name = find_sheet_name_treatment(wb, REQUIRED_TREATMENT_SHEET)
+    if not sheet_name:
+        raise ValueError('A planilha obrigatória "Mensagens" não foi encontrada no arquivo.')
+
+    ws = wb[sheet_name]
+    stream_meta = prepare_treatment_stream(ws)
+    headers = stream_meta["output_headers"]
+
+    export_name = build_treatment_export_name(filename)
+    output_path = TEMP_TREATMENT_DIR / f"{uuid.uuid4().hex}_{export_name}"
+    output_wb = Workbook(write_only=True)
+    output_ws = output_wb.create_sheet(title="Tratado")
+    output_ws.append(headers)
+
+    preview_rows = []
+    row_count = 0
+    if progress_cb:
+        progress_cb("processing_rows", "Tratando linhas da planilha...")
+    for row_values in iter_processed_rows_treatment_from_worksheet(ws, stream_meta):
+        output_ws.append(row_values)
+        row_count += 1
+        if len(preview_rows) < PREVIEW_LIMIT:
+            preview_rows.append(make_preview_row_treatment(headers, row_values))
+        if progress_cb and row_count % 5000 == 0:
+            progress_cb("processing_rows", "Tratando linhas da planilha...", current=row_count, total=None)
+
+    if row_count == 0:
+        raise ValueError("Nenhuma linha válida foi encontrada para tratamento.")
+
+    if "Sheet" in output_wb.sheetnames:
+        output_wb.remove(output_wb["Sheet"])
+    if progress_cb:
+        progress_cb("writing_output", "Gerando arquivo final para download...", current=row_count, total=None)
+    output_wb.save(output_path)
+    processed_at = time.perf_counter()
+
+    job_id = register_treatment_job(output_path, export_name, job_id=job_id)
+    finished_at = time.perf_counter()
+
+    print(
+        "[treatment] process_treatment "
+        f"open={workbook_opened_at - started_at:.2f}s "
+        f"process_write={processed_at - workbook_opened_at:.2f}s "
+        f"register={finished_at - processed_at:.2f}s "
+        f"total={finished_at - started_at:.2f}s "
+        f"rows={row_count}",
+        flush=True,
+    )
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "original_file_name": filename,
+        "export_file_name": export_name,
+        "sheet_name": sheet_name,
+        "row_count": row_count,
+        "column_count": len(headers),
+        "preview_headers": headers,
+        "preview_rows": preview_rows,
+    }
+
+
+def process_treatment_step1_file_bytes(file_bytes: bytes, filename: str, config: dict, job_id: str | None = None, progress_cb=None):
+    started_at = time.perf_counter()
+    if progress_cb:
+        progress_cb("opening_workbook", "Abrindo planilha...")
+    wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    workbook_opened_at = time.perf_counter()
+
+    target_sheet_name = find_sheet_name_treatment(wb, REQUIRED_TREATMENT_SHEET)
+    if not target_sheet_name:
+        raise ValueError('A planilha obrigatória "Mensagens" não foi encontrada no arquivo.')
+
+    trips_sheet_name = find_sheet_name_treatment(wb, TRIPS_TREATMENT_SHEET)
+    trips_headers = []
+    trips_rows = []
+    trips = []
+
+    if trips_sheet_name:
+        if progress_cb:
+            progress_cb("processing_rows", "Lendo aba Horas de motor...")
+        treated_trips = process_trips_sheet_rows_treatment(worksheet_to_rows(wb[trips_sheet_name]))
+        trips_headers = treated_trips["headers"]
+        trips_rows = treated_trips["rows"]
+        trips = treated_trips["trips"]
+    trips_processed_at = time.perf_counter()
+
+    ws = wb[target_sheet_name]
+    stream_meta = prepare_treatment_stream(ws)
+    treated_headers = stream_meta["output_headers"]
+    analysis_headers = [header for header in treated_headers if header not in ANALYSIS_HEADERS_TREATMENT] + ANALYSIS_HEADERS_TREATMENT
+    indexed_trips, trip_starts = build_trip_search_index_treatment(trips)
+
+    export_name = build_analysis_export_name(filename)
+    output_path = TEMP_TREATMENT_DIR / f"{uuid.uuid4().hex}_{export_name}"
+    output_wb = Workbook(write_only=True)
+    analysis_ws = output_wb.create_sheet(title="Tratado Analise")
+    analysis_ws.append(analysis_headers)
+
+    hour_idx = resolve_header_index_treatment(treated_headers, ["Hora"])
+    hour_unix_idx = resolve_header_index_treatment(treated_headers, ["Hora Unix", "HoraUnix"])
+    rpm_idx = resolve_header_index_treatment(treated_headers, ["RPM"])
+    speed_idx = resolve_header_index_treatment(treated_headers, ["Velocidade_2", "Velocidade"])
+    accel_idx = resolve_header_index_treatment(treated_headers, ["Acelerador"])
+    brake_idx = resolve_header_index_treatment(treated_headers, ["Freio"])
+
+    recent_brake_events = []
+    previous_brake_active = False
+    preview_rows = []
+    row_count = 0
+
+    if progress_cb:
+        progress_cb("processing_rows", "Tratando linhas da planilha com análise...")
+    for treated_values in iter_processed_rows_treatment_from_worksheet(ws, stream_meta):
+        current_date = get_datetime_from_indexed_row_treatment(
+            treated_values,
+            hour_idx,
+            hour_unix_idx,
+        )
+        current_ts = current_date.timestamp() if current_date else None
+        rpm_value = get_numeric_from_indexed_row_treatment(treated_values, rpm_idx)
+        speed_value = get_numeric_from_indexed_row_treatment(treated_values, speed_idx)
+        accel_value = get_numeric_from_indexed_row_treatment(treated_values, accel_idx)
+        brake_active = (
+            is_brake_activated_treatment(treated_values[brake_idx])
+            if brake_idx is not None and brake_idx < len(treated_values)
+            else False
+        )
+
+        if current_ts is not None:
+            recent_brake_events = [ts for ts in recent_brake_events if ts >= current_ts - 60]
+            if brake_active and not previous_brake_active:
+                recent_brake_events.append(current_ts)
+
+        speed_transit = classify_speed_transit_treatment(speed_value, config)
+        note_route = get_route_score_treatment(speed_transit)
+        brake_count = len(recent_brake_events) if current_ts is not None and brake_idx is not None else None
+        brake_label = classify_brake_treatment(brake_count, config)
+        green_band = classify_green_band_treatment(rpm_value, config)
+        rpm_transit = classify_rpm_transit_treatment(rpm_value, config)
+        acceleration_label = classify_acceleration_treatment(accel_value, config)
+        sum_score = calculate_sum_score_treatment(
+            green_band=green_band,
+            speed_transit=speed_transit,
+            rpm_transit=rpm_transit,
+            acceleration=acceleration_label,
+            brakes=brake_label,
+        )
+        driver_score = calculate_driver_score_treatment(sum_score, note_route)
+        trip_id = find_trip_id_with_index_treatment(current_date, indexed_trips, trip_starts)
+        previous_brake_active = brake_active
+
+        analysis_values = [
+            format_day_month_treatment(current_date),
+            green_band,
+            speed_transit,
+            rpm_transit,
+            acceleration_label,
+            brake_label,
+            note_route,
+            sum_score,
+            driver_score,
+            trip_id,
+        ]
+        output_values = treated_values + analysis_values
+        analysis_ws.append(output_values)
+        row_count += 1
+
+        if len(preview_rows) < PREVIEW_LIMIT:
+            preview_rows.append(make_preview_row_treatment(analysis_headers, output_values))
+        if progress_cb and row_count % 5000 == 0:
+            progress_cb("processing_rows", "Tratando linhas da planilha com análise...", current=row_count, total=None)
+
+    if row_count == 0:
+        raise ValueError("Nenhuma linha válida foi encontrada para tratamento.")
+
+    if trips_sheet_name and trips_headers and trips_rows:
+        trips_ws = output_wb.create_sheet(title=(trips_sheet_name or "Sheet1")[:31])
+        trips_ws.append(trips_headers)
+        for row in trips_rows:
+            trips_ws.append([row.get(header, "") for header in trips_headers])
+
+    if "Sheet" in output_wb.sheetnames:
+        output_wb.remove(output_wb["Sheet"])
+    if progress_cb:
+        progress_cb("writing_output", "Gerando arquivo final para download...", current=row_count, total=None)
+    output_wb.save(output_path)
+    processed_at = time.perf_counter()
+
+    job_id = register_treatment_job(output_path, export_name, job_id=job_id)
+    finished_at = time.perf_counter()
+
+    print(
+        "[treatment] process_treatment_step1 "
+        f"open={workbook_opened_at - started_at:.2f}s "
+        f"trips={trips_processed_at - workbook_opened_at:.2f}s "
+        f"process_write={processed_at - trips_processed_at:.2f}s "
+        f"register={finished_at - processed_at:.2f}s "
+        f"total={finished_at - started_at:.2f}s "
+        f"rows={row_count} "
+        f"trips_count={len(trips)}",
+        flush=True,
+    )
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "original_file_name": filename,
+        "export_file_name": export_name,
+        "sheet_name": target_sheet_name,
+        "trips_count": len(trips),
+        "row_count": row_count,
+        "column_count": len(analysis_headers),
+        "preview_headers": analysis_headers,
+        "preview_rows": preview_rows,
+    }
+
+
+def run_treatment_job(job_id: str, temp_input_path: Path, filename: str):
+    def progress_cb(phase, message, current=None, total=None):
+        update_treatment_progress(job_id, phase, message, current=current, total=total, status="processing")
+
+    try:
+        update_treatment_progress(job_id, "opening_workbook", "Abrindo planilha...", status="processing")
+        file_bytes = temp_input_path.read_bytes()
+        result = process_treatment_file_bytes(file_bytes, filename, job_id=job_id, progress_cb=progress_cb)
+        result["job_id"] = job_id
+        update_treatment_status(
+            job_id,
+            status="done",
+            result=result,
+            error=None,
+            progress={
+                "phase": "done",
+                "message": "Arquivo processado com sucesso",
+                "current": None,
+                "total": None,
+            },
+        )
+    except Exception as e:
+        update_treatment_status(
+            job_id,
+            status="error",
+            result=None,
+            error=str(e),
+            progress={
+                "phase": "error",
+                "message": "Falha no processamento",
+                "current": None,
+                "total": None,
+            },
+        )
+    finally:
+        try:
+            temp_input_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def run_treatment_step1_job(job_id: str, temp_input_path: Path, filename: str, config: dict):
+    def progress_cb(phase, message, current=None, total=None):
+        update_treatment_progress(job_id, phase, message, current=current, total=total, status="processing")
+
+    try:
+        update_treatment_progress(job_id, "opening_workbook", "Abrindo planilha...", status="processing")
+        file_bytes = temp_input_path.read_bytes()
+        result = process_treatment_step1_file_bytes(
+            file_bytes,
+            filename,
+            config,
+            job_id=job_id,
+            progress_cb=progress_cb,
+        )
+        result["job_id"] = job_id
+        update_treatment_status(
+            job_id,
+            status="done",
+            result=result,
+            error=None,
+            progress={
+                "phase": "done",
+                "message": "Arquivo processado com sucesso",
+                "current": None,
+                "total": None,
+            },
+        )
+    except Exception as e:
+        update_treatment_status(
+            job_id,
+            status="error",
+            result=None,
+            error=str(e),
+            progress={
+                "phase": "error",
+                "message": "Falha no processamento",
+                "current": None,
+                "total": None,
+            },
+        )
+    finally:
+        try:
+            temp_input_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 # -----------------------------
@@ -1074,6 +2309,19 @@ class Handler(BaseHTTPRequestHandler):
     def _send_html(self, html: str, code=200):
         self._send_text(html, "text/html; charset=utf-8", code)
 
+    def _read_raw_body(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        return self.rfile.read(length) if length > 0 else b""
+
+    def _safe_json_header(self, name, default=None):
+        raw = self.headers.get(name)
+        if not raw:
+            return default
+        try:
+            return json.loads(raw)
+        except Exception:
+            return default
+
     def _serve_file(self, file_path: Path, content_type: str | None = None, not_found_msg: str = "arquivo nao encontrado"):
         try:
             if not file_path.exists() or not file_path.is_file():
@@ -1206,6 +2454,65 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, 500)
             return
 
+        if path == "/treatment_status":
+            job_id = (qs.get("job_id") or [""])[0].strip()
+            if not job_id:
+                self._send_json({"ok": False, "error": "missing job_id"}, 400)
+                return
+
+            status = get_treatment_status(job_id)
+            if not status:
+                self._send_json({"ok": False, "error": "job_not_found"}, 404)
+                return
+
+            self._send_json(
+                {
+                    "ok": True,
+                    "job_id": job_id,
+                    "status": status.get("status"),
+                    "progress": status.get("progress"),
+                    "result": status.get("result"),
+                    "error": status.get("error"),
+                },
+                200,
+            )
+            return
+
+        if path == "/download_treatment_result":
+            job_id = (qs.get("job_id") or [""])[0].strip()
+            if not job_id:
+                self._send_json({"ok": False, "error": "missing job_id"}, 400)
+                return
+
+            status = get_treatment_status(job_id)
+            if status and status.get("status") != "done":
+                self._send_json({"ok": False, "error": "job_not_ready"}, 409)
+                return
+
+            job = get_treatment_job(job_id)
+            if not job:
+                self._send_json({"ok": False, "error": "job_not_found"}, 404)
+                return
+
+            file_path = Path(job["path"])
+            if not file_path.exists():
+                self._send_json({"ok": False, "error": "file_not_found"}, 404)
+                return
+
+            content = file_path.read_bytes()
+            self.send_response(200)
+            self._set_common_headers(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                len(content),
+            )
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{job["download_name"]}"'
+            )
+            self.end_headers()
+            self.wfile.write(content)
+            return
+
         if path in ("/", "/dashboard.html"):
             self._send_html(load_dashboard_html(), 200)
             return
@@ -1214,6 +2521,60 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+
+        if path in {"/process_treatment", "/process_treatment_step1"}:
+            try:
+                raw_body = self._read_raw_body()
+                if not raw_body:
+                    self._send_json({"ok": False, "error": "empty body"}, 400)
+                    return
+
+                raw_filename = self.headers.get("X-Filename", "arquivo.xlsx")
+                try:
+                    filename = unquote(raw_filename)
+                except Exception:
+                    filename = raw_filename
+
+                job_id = uuid.uuid4().hex
+                input_path = save_treatment_input_file(raw_body, filename, job_id)
+
+                if path == "/process_treatment":
+                    create_treatment_status(job_id, "base", filename, input_path)
+                    worker = threading.Thread(
+                        target=run_treatment_job,
+                        args=(job_id, input_path, filename),
+                        daemon=True,
+                    )
+                else:
+                    config = self._safe_json_header("X-Treatment-Config", {}) or {}
+                    config = {
+                        "bestRpmMin": float(config.get("bestRpmMin", 1100)),
+                        "bestRpmMax": float(config.get("bestRpmMax", 1900)),
+                        "speedLowMax": float(config.get("speedLowMax", 10)),
+                        "speedMediumMax": float(config.get("speedMediumMax", 15)),
+                        "rpmUsefulStart": float(config.get("rpmUsefulStart", 900)),
+                        "rpmLightStart": float(config.get("rpmLightStart", 1100)),
+                        "rpmUsefulEnd": float(config.get("rpmUsefulEnd", 1900)),
+                        "accelLightMax": float(config.get("accelLightMax", 30)),
+                        "accelMediumMax": float(config.get("accelMediumMax", 60)),
+                        "brakeMediumMin": float(config.get("brakeMediumMin", 2)),
+                        "brakeIntenseMin": float(config.get("brakeIntenseMin", 4)),
+                    }
+                    create_treatment_status(job_id, "step1", filename, input_path)
+                    worker = threading.Thread(
+                        target=run_treatment_step1_job,
+                        args=(job_id, input_path, filename, config),
+                        daemon=True,
+                    )
+
+                worker.start()
+                self._send_json({"ok": True, "job_id": job_id, "status": "queued"}, 202)
+                return
+
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+                return
+
         try:
             length = int(self.headers.get("Content-Length", "0"))
             raw_body = self.rfile.read(length) if length > 0 else b"{}"
