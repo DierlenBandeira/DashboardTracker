@@ -37,7 +37,7 @@
 
     if (!contentType.includes("application/json")) {
       throw new Error(
-        `Resposta da API não é JSON (HTTP ${response.status}). Retorno: ${bodyPreview || "[vazio]"}`
+        `Resposta inválida do servidor (${response.status}). Esperado JSON, recebido: ${bodyPreview || "[vazio]"}`
       );
     }
 
@@ -45,7 +45,7 @@
       return JSON.parse(rawText);
     } catch (error) {
       throw new Error(
-        `JSON inválido retornado pela API (HTTP ${response.status}). Retorno: ${bodyPreview || "[vazio]"}`
+        `JSON inválido retornado pela API (${response.status}). Retorno: ${bodyPreview || "[vazio]"}`
       );
     }
   }
