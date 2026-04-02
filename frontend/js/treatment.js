@@ -304,6 +304,7 @@
     const progress = statusPayload?.progress || {};
     const phase = progress.phase || "";
     const message = describeProgress(progress, "Processando arquivo...");
+    const current = progress?.current;
 
     if (phase === "upload_received") {
       updateStatus("Arquivo enviado", "warn");
@@ -311,6 +312,13 @@
       updateStatus("Finalizando arquivo", "warn");
     } else {
       updateStatus("Processando", "warn");
+    }
+
+    if (typeof current === "number") {
+      els.rowCount.textContent = String(current);
+    }
+    if (state.isProcessing) {
+      els.columnCount.textContent = "-";
     }
 
     els.meta.textContent = message;
@@ -395,6 +403,8 @@
 
     updateStatus("Arquivo enviado", "warn");
     els.fileName.textContent = file.name;
+    els.rowCount.textContent = "0";
+    els.columnCount.textContent = "-";
     els.meta.textContent = "Upload concluído. Preparando processamento...";
 
     const extraHeaders = options.extraHeaders || {};

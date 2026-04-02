@@ -2,6 +2,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import time
 import threading
 import uuid
@@ -408,6 +409,24 @@ ANALYSIS_HEADERS_TREATMENT = [
     "Viagem",
 ]
 
+NORMALIZE_KEY_TRANSLATION_TREATMENT = str.maketrans({
+    "á": "a", "à": "a", "â": "a", "ã": "a",
+    "é": "e", "ê": "e",
+    "í": "i",
+    "ó": "o", "ô": "o", "õ": "o",
+    "ú": "u",
+    "ç": "c",
+})
+NUMBER_TOKEN_PATTERN_TREATMENT = re.compile(r"-?\d[\d.,]*")
+PROGRESS_UPDATE_EVERY_TREATMENT = int(os.getenv("PROGRESS_UPDATE_EVERY_TREATMENT", "250"))
+TREATMENT_OPEN_FROM_PATH = os.getenv("TREATMENT_OPEN_FROM_PATH", "1") == "1"
+DATE_FORMATS_SLASH_WITH_TIME_4_TREATMENT = ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M")
+DATE_FORMATS_SLASH_WITH_TIME_2_TREATMENT = ("%d/%m/%y %H:%M:%S", "%d/%m/%y %H:%M")
+DATE_FORMATS_SLASH_DATE_4_TREATMENT = ("%d/%m/%Y",)
+DATE_FORMATS_SLASH_DATE_2_TREATMENT = ("%d/%m/%y",)
+DATE_FORMATS_DASH_WITH_TIME_TREATMENT = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M")
+DATE_FORMATS_DASH_DATE_TREATMENT = ("%Y-%m-%d",)
+
 
 def cleanup_old_treatment_jobs(max_age_seconds: int = 3600):
     now = time.time()
@@ -527,7 +546,19 @@ def save_treatment_input_file(file_bytes: bytes, filename: str, job_id: str):
 
 
 def normalize_spaces_treatment(value):
-    return " ".join(str("" if value is None else value).replace("\u00A0", " ").split()).strip()
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        if not value:
+            return ""
+        text = value.replace("\u00A0", " ")
+        stripped = text.strip()
+        if not stripped:
+            return ""
+        if "  " not in stripped and "\t" not in stripped and "\n" not in stripped and "\r" not in stripped:
+            return stripped
+        return " ".join(stripped.split())
+    return " ".join(str(value).replace("\u00A0", " ").split()).strip()
 
 
 def normalize_header_treatment(value, fallback_index):
@@ -536,18 +567,7 @@ def normalize_header_treatment(value, fallback_index):
 
 
 def normalize_key_treatment(value):
-    text = normalize_spaces_treatment(value).replace("*", "").lower()
-    replacements = {
-        "á": "a", "à": "a", "â": "a", "ã": "a",
-        "é": "e", "ê": "e",
-        "í": "i",
-        "ó": "o", "ô": "o", "õ": "o",
-        "ú": "u",
-        "ç": "c",
-    }
-    for src, dst in replacements.items():
-        text = text.replace(src, dst)
-    return text
+    return normalize_spaces_treatment(value).replace("*", "").lower().translate(NORMALIZE_KEY_TRANSLATION_TREATMENT)
 
 
 def make_unique_headers_treatment(headers):
@@ -563,7 +583,15 @@ def make_unique_headers_treatment(headers):
 def is_row_empty_treatment(row):
     if not isinstance(row, (list, tuple)):
         return True
-    return all(normalize_spaces_treatment(cell) == "" for cell in row)
+    for cell in row:
+        if cell is None:
+            continue
+        if isinstance(cell, str):
+            if normalize_spaces_treatment(cell) != "":
+                return False
+            continue
+        return False
+    return True
 
 
 def worksheet_to_rows(ws):
@@ -602,15 +630,31 @@ def build_output_headers_treatment(headers, key_map):
     return output_headers
 
 
-def normalize_cell_for_treatment(raw_value, key):
-    if key == "hora":
+def build_column_modes_treatment(key_map):
+    modes = []
+    for key in key_map:
+        if key == "agrupamento":
+            modes.append("skip")
+        elif key == "hora":
+            modes.append("hour")
+        elif key in NUMERIC_COLUMNS_TREATMENT:
+            modes.append("numeric")
+        else:
+            modes.append("text")
+    return modes
+
+
+def normalize_cell_for_treatment(raw_value, key, mode=None):
+    mode = mode or key
+
+    if mode == "hour":
         parsed = parse_brazil_datetime_treatment(raw_value)
         return (
             format_datetime_br_treatment(parsed) if parsed else normalize_spaces_treatment(raw_value),
             int(parsed.timestamp()) if parsed else "",
         )
 
-    if key in NUMERIC_COLUMNS_TREATMENT:
+    if mode == "numeric":
         numeric = to_number_maybe_treatment(raw_value)
         if isinstance(numeric, (int, float)):
             return round_if_needed_treatment(numeric, key)
@@ -622,34 +666,36 @@ def normalize_cell_for_treatment(raw_value, key):
     return normalize_spaces_treatment(raw_value)
 
 
-def transform_row_values_treatment(row, headers, key_map, source_line_number):
+def transform_row_values_treatment(row, key_map, column_modes, source_line_number):
     output_values = []
     has_any_data = False
+    row_len = len(row)
+    append_value = output_values.append
 
-    for col_index, key in enumerate(key_map):
-        raw_value = row[col_index] if col_index < len(row) else None
-        header = headers[col_index]
-
-        if key == "agrupamento":
+    for col_index, mode in enumerate(column_modes):
+        if mode == "skip":
             continue
 
-        if key == "hora":
-            hour_value, hour_unix = normalize_cell_for_treatment(raw_value, key)
-            output_values.append(hour_value)
-            output_values.append(hour_unix)
+        raw_value = row[col_index] if col_index < row_len else None
+        key = key_map[col_index]
+
+        if mode == "hour":
+            hour_value, hour_unix = normalize_cell_for_treatment(raw_value, key, mode)
+            append_value(hour_value)
+            append_value(hour_unix)
             if hour_value != "" or hour_unix != "":
                 has_any_data = True
             continue
 
-        cell_value = normalize_cell_for_treatment(raw_value, key)
-        output_values.append(cell_value)
+        cell_value = normalize_cell_for_treatment(raw_value, key, mode)
+        append_value(cell_value)
         if cell_value != "":
             has_any_data = True
 
     if not has_any_data:
         return None
 
-    output_values.append(source_line_number)
+    append_value(source_line_number)
     return output_values
 
 
@@ -665,20 +711,21 @@ def prepare_treatment_stream(ws):
     raw_headers = [normalize_header_treatment(value, idx) for idx, value in enumerate(header_row or [])]
     headers = make_unique_headers_treatment(raw_headers)
     key_map = [normalize_key_treatment(header) for header in headers]
+    column_modes = build_column_modes_treatment(key_map)
     output_headers = build_output_headers_treatment(headers, key_map)
 
     return {
         "header_index": header_index,
-        "headers": headers,
         "key_map": key_map,
+        "column_modes": column_modes,
         "output_headers": output_headers,
     }
 
 
 def iter_processed_rows_treatment_from_worksheet(ws, stream_meta):
     header_index = stream_meta["header_index"]
-    headers = stream_meta["headers"]
     key_map = stream_meta["key_map"]
+    column_modes = stream_meta["column_modes"]
 
     for row_index, row in enumerate(ws.iter_rows(values_only=True)):
         if row_index <= header_index:
@@ -688,8 +735,8 @@ def iter_processed_rows_treatment_from_worksheet(ws, stream_meta):
 
         transformed = transform_row_values_treatment(
             row=row,
-            headers=headers,
             key_map=key_map,
+            column_modes=column_modes,
             source_line_number=row_index + 1,
         )
         if transformed is None:
@@ -722,17 +769,20 @@ def parse_brazil_datetime_treatment(value):
     if not text:
         return None
 
-    for fmt in (
-        "%d/%m/%Y %H:%M:%S",
-        "%d/%m/%Y %H:%M",
-        "%d/%m/%y %H:%M:%S",
-        "%d/%m/%y %H:%M",
-        "%d/%m/%Y",
-        "%d/%m/%y",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d",
-    ):
+    if "/" in text:
+        if " " in text:
+            date_part = text.split(" ", 1)[0]
+            year_len = len(date_part.rsplit("/", 1)[-1])
+            formats = DATE_FORMATS_SLASH_WITH_TIME_4_TREATMENT if year_len == 4 else DATE_FORMATS_SLASH_WITH_TIME_2_TREATMENT
+        else:
+            year_len = len(text.rsplit("/", 1)[-1])
+            formats = DATE_FORMATS_SLASH_DATE_4_TREATMENT if year_len == 4 else DATE_FORMATS_SLASH_DATE_2_TREATMENT
+    elif "-" in text:
+        formats = DATE_FORMATS_DASH_WITH_TIME_TREATMENT if " " in text else DATE_FORMATS_DASH_DATE_TREATMENT
+    else:
+        return None
+
+    for fmt in formats:
         try:
             return datetime.strptime(text, fmt)
         except Exception:
@@ -792,17 +842,28 @@ def to_number_maybe_treatment(value):
     if not original:
         return ""
 
-    import re
-    candidates = re.findall(r"-?\d[\d.,]*", original)
-    if not candidates:
+    if any(ch.isdigit() for ch in original):
+        simple_candidate = original.replace("−", "-").replace(" ", "")
+        if all(ch.isdigit() or ch in "-.,+" for ch in simple_candidate):
+            num = token_to_number_treatment(simple_candidate)
+            return num if num is not None else original
+    else:
         return original
 
-    candidates = sorted(
-        candidates,
-        key=lambda x: (len([d for d in x if d.isdigit()]), len(x)),
-        reverse=True,
-    )
-    num = token_to_number_treatment(candidates[0])
+    best_candidate = None
+    best_score = (-1, -1)
+    for match in NUMBER_TOKEN_PATTERN_TREATMENT.finditer(original):
+        candidate = match.group(0)
+        digit_count = sum(ch.isdigit() for ch in candidate)
+        score = (digit_count, len(candidate))
+        if score > best_score:
+            best_candidate = candidate
+            best_score = score
+
+    if not best_candidate:
+        return original
+
+    num = token_to_number_treatment(best_candidate)
     return num if num is not None else original
 
 
@@ -1280,18 +1341,34 @@ def build_analysis_rows_treatment(rows, headers, trips, config):
     return analysis_headers, analysis_rows
 
 
-def process_treatment_file_bytes(file_bytes: bytes, filename: str, job_id: str | None = None, progress_cb=None):
+def open_treatment_workbook(file_bytes: bytes | None = None, input_path: Path | None = None):
+    if TREATMENT_OPEN_FROM_PATH and input_path:
+        return load_workbook(input_path, data_only=True, read_only=True), "path"
+    if file_bytes is None:
+        raise ValueError("file_bytes ausente para abertura do workbook.")
+    return load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True), "bytes"
+
+
+def process_treatment_file_bytes(
+    file_bytes: bytes | None,
+    filename: str,
+    job_id: str | None = None,
+    progress_cb=None,
+    input_path: Path | None = None,
+):
     started_at = time.perf_counter()
     if progress_cb:
         progress_cb("opening_workbook", "Abrindo planilha...")
-    wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
-    workbook_opened_at = time.perf_counter()
+    wb, open_mode = open_treatment_workbook(file_bytes=file_bytes, input_path=input_path)
+    load_completed_at = time.perf_counter()
     sheet_name = find_sheet_name_treatment(wb, REQUIRED_TREATMENT_SHEET)
+    sheet_resolved_at = time.perf_counter()
     if not sheet_name:
         raise ValueError('A planilha obrigatória "Mensagens" não foi encontrada no arquivo.')
 
     ws = wb[sheet_name]
     stream_meta = prepare_treatment_stream(ws)
+    stream_prepared_at = time.perf_counter()
     headers = stream_meta["output_headers"]
 
     export_name = build_treatment_export_name(filename)
@@ -1309,29 +1386,39 @@ def process_treatment_file_bytes(file_bytes: bytes, filename: str, job_id: str |
         row_count += 1
         if len(preview_rows) < PREVIEW_LIMIT:
             preview_rows.append(make_preview_row_treatment(headers, row_values))
-        if progress_cb and row_count % 5000 == 0:
+        if progress_cb and row_count % PROGRESS_UPDATE_EVERY_TREATMENT == 0:
             progress_cb("processing_rows", "Tratando linhas da planilha...", current=row_count, total=None)
 
     if row_count == 0:
         raise ValueError("Nenhuma linha válida foi encontrada para tratamento.")
 
+    loop_completed_at = time.perf_counter()
     if "Sheet" in output_wb.sheetnames:
         output_wb.remove(output_wb["Sheet"])
     if progress_cb:
         progress_cb("writing_output", "Gerando arquivo final para download...", current=row_count, total=None)
     output_wb.save(output_path)
-    processed_at = time.perf_counter()
+    save_completed_at = time.perf_counter()
 
     job_id = register_treatment_job(output_path, export_name, job_id=job_id)
     finished_at = time.perf_counter()
+    total_seconds = finished_at - started_at
+    rows_per_second = (row_count / total_seconds) if total_seconds > 0 else 0.0
+    rows_per_minute = rows_per_second * 60.0
 
     print(
-        "[treatment] process_treatment "
-        f"open={workbook_opened_at - started_at:.2f}s "
-        f"process_write={processed_at - workbook_opened_at:.2f}s "
-        f"register={finished_at - processed_at:.2f}s "
-        f"total={finished_at - started_at:.2f}s "
-        f"rows={row_count}",
+        f"[treatment][job_id={job_id or '-'}][mode={open_mode}] "
+        "process_treatment "
+        f"total={total_seconds:.2f}s "
+        f"load={load_completed_at - started_at:.2f}s "
+        f"sheet={sheet_resolved_at - load_completed_at:.2f}s "
+        f"prepare={stream_prepared_at - sheet_resolved_at:.2f}s "
+        f"process={loop_completed_at - stream_prepared_at:.2f}s "
+        f"save={save_completed_at - loop_completed_at:.2f}s "
+        f"register={finished_at - save_completed_at:.2f}s "
+        f"rows={row_count} "
+        f"rps={rows_per_second:.2f} "
+        f"rpm={rows_per_minute:.2f}",
         flush=True,
     )
 
@@ -1348,14 +1435,22 @@ def process_treatment_file_bytes(file_bytes: bytes, filename: str, job_id: str |
     }
 
 
-def process_treatment_step1_file_bytes(file_bytes: bytes, filename: str, config: dict, job_id: str | None = None, progress_cb=None):
+def process_treatment_step1_file_bytes(
+    file_bytes: bytes | None,
+    filename: str,
+    config: dict,
+    job_id: str | None = None,
+    progress_cb=None,
+    input_path: Path | None = None,
+):
     started_at = time.perf_counter()
     if progress_cb:
         progress_cb("opening_workbook", "Abrindo planilha...")
-    wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
-    workbook_opened_at = time.perf_counter()
+    wb, open_mode = open_treatment_workbook(file_bytes=file_bytes, input_path=input_path)
+    load_completed_at = time.perf_counter()
 
     target_sheet_name = find_sheet_name_treatment(wb, REQUIRED_TREATMENT_SHEET)
+    target_sheet_resolved_at = time.perf_counter()
     if not target_sheet_name:
         raise ValueError('A planilha obrigatória "Mensagens" não foi encontrada no arquivo.')
 
@@ -1375,9 +1470,11 @@ def process_treatment_step1_file_bytes(file_bytes: bytes, filename: str, config:
 
     ws = wb[target_sheet_name]
     stream_meta = prepare_treatment_stream(ws)
+    stream_prepared_at = time.perf_counter()
     treated_headers = stream_meta["output_headers"]
     analysis_headers = [header for header in treated_headers if header not in ANALYSIS_HEADERS_TREATMENT] + ANALYSIS_HEADERS_TREATMENT
     indexed_trips, trip_starts = build_trip_search_index_treatment(trips)
+    analysis_context_ready_at = time.perf_counter()
 
     export_name = build_analysis_export_name(filename)
     output_path = TEMP_TREATMENT_DIR / f"{uuid.uuid4().hex}_{export_name}"
@@ -1456,12 +1553,13 @@ def process_treatment_step1_file_bytes(file_bytes: bytes, filename: str, config:
 
         if len(preview_rows) < PREVIEW_LIMIT:
             preview_rows.append(make_preview_row_treatment(analysis_headers, output_values))
-        if progress_cb and row_count % 5000 == 0:
+        if progress_cb and row_count % PROGRESS_UPDATE_EVERY_TREATMENT == 0:
             progress_cb("processing_rows", "Tratando linhas da planilha com análise...", current=row_count, total=None)
 
     if row_count == 0:
         raise ValueError("Nenhuma linha válida foi encontrada para tratamento.")
 
+    loop_completed_at = time.perf_counter()
     if trips_sheet_name and trips_headers and trips_rows:
         trips_ws = output_wb.create_sheet(title=(trips_sheet_name or "Sheet1")[:31])
         trips_ws.append(trips_headers)
@@ -1473,19 +1571,29 @@ def process_treatment_step1_file_bytes(file_bytes: bytes, filename: str, config:
     if progress_cb:
         progress_cb("writing_output", "Gerando arquivo final para download...", current=row_count, total=None)
     output_wb.save(output_path)
-    processed_at = time.perf_counter()
+    save_completed_at = time.perf_counter()
 
     job_id = register_treatment_job(output_path, export_name, job_id=job_id)
     finished_at = time.perf_counter()
+    total_seconds = finished_at - started_at
+    rows_per_second = (row_count / total_seconds) if total_seconds > 0 else 0.0
+    rows_per_minute = rows_per_second * 60.0
 
     print(
-        "[treatment] process_treatment_step1 "
-        f"open={workbook_opened_at - started_at:.2f}s "
-        f"trips={trips_processed_at - workbook_opened_at:.2f}s "
-        f"process_write={processed_at - trips_processed_at:.2f}s "
-        f"register={finished_at - processed_at:.2f}s "
-        f"total={finished_at - started_at:.2f}s "
+        f"[treatment][job_id={job_id or '-'}][mode={open_mode}] "
+        "process_treatment_step1 "
+        f"total={total_seconds:.2f}s "
+        f"load={load_completed_at - started_at:.2f}s "
+        f"sheet={target_sheet_resolved_at - load_completed_at:.2f}s "
+        f"trips={trips_processed_at - target_sheet_resolved_at:.2f}s "
+        f"prepare={stream_prepared_at - trips_processed_at:.2f}s "
+        f"context={analysis_context_ready_at - stream_prepared_at:.2f}s "
+        f"process={loop_completed_at - analysis_context_ready_at:.2f}s "
+        f"save={save_completed_at - loop_completed_at:.2f}s "
+        f"register={finished_at - save_completed_at:.2f}s "
         f"rows={row_count} "
+        f"rps={rows_per_second:.2f} "
+        f"rpm={rows_per_minute:.2f} "
         f"trips_count={len(trips)}",
         flush=True,
     )
@@ -1510,8 +1618,14 @@ def run_treatment_job(job_id: str, temp_input_path: Path, filename: str):
 
     try:
         update_treatment_progress(job_id, "opening_workbook", "Abrindo planilha...", status="processing")
-        file_bytes = temp_input_path.read_bytes()
-        result = process_treatment_file_bytes(file_bytes, filename, job_id=job_id, progress_cb=progress_cb)
+        file_bytes = None if TREATMENT_OPEN_FROM_PATH else temp_input_path.read_bytes()
+        result = process_treatment_file_bytes(
+            file_bytes,
+            filename,
+            job_id=job_id,
+            progress_cb=progress_cb,
+            input_path=temp_input_path,
+        )
         result["job_id"] = job_id
         update_treatment_status(
             job_id,
@@ -1551,13 +1665,14 @@ def run_treatment_step1_job(job_id: str, temp_input_path: Path, filename: str, c
 
     try:
         update_treatment_progress(job_id, "opening_workbook", "Abrindo planilha...", status="processing")
-        file_bytes = temp_input_path.read_bytes()
+        file_bytes = None if TREATMENT_OPEN_FROM_PATH else temp_input_path.read_bytes()
         result = process_treatment_step1_file_bytes(
             file_bytes,
             filename,
             config,
             job_id=job_id,
             progress_cb=progress_cb,
+            input_path=temp_input_path,
         )
         result["job_id"] = job_id
         update_treatment_status(
