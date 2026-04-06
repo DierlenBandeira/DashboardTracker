@@ -127,7 +127,9 @@ function getChartXZoom(state) {
 }
 
 function formatChartZoom(state) {
-  return `${Math.round(getChartXZoom(state) * 100)}%`;
+  const rawPct = getChartXZoom(state) * 100;
+  const pct = state?.mode === "replay" ? Math.round(rawPct / 5) * 5 : Math.round(rawPct);
+  return `${pct}%`;
 }
 
 function getCanvasWidthCapForState(state) {
@@ -146,6 +148,15 @@ function updateChartZoomUi(instanceLike = null) {
   }
 }
 
+function getReplayAxisTickCount(state, totalSlots) {
+  if (!totalSlots) return 0;
+  if (state?.mode !== "replay") return Math.min(6, totalSlots);
+
+  const zoomFactor = getChartXZoom(state);
+  const tickCount = Math.round(6 + (zoomFactor - 1) * 6);
+  return Math.min(totalSlots, Math.max(6, tickCount));
+}
+
 function getEffectivePxPerPoint(totalPoints, zoomFactor = DEFAULT_X_ZOOM, widthCap = MAX_CANVAS_CSS_WIDTH) {
   if (totalPoints <= 0) return BASE_PX_PER_POINT * zoomFactor;
 
@@ -159,10 +170,20 @@ function getEffectivePxPerPoint(totalPoints, zoomFactor = DEFAULT_X_ZOOM, widthC
 function getSafeDevicePixelRatio(state = null, cssWidth = 0) {
   const dpr = window.devicePixelRatio || 1;
   if (state?.mode === "replay") {
+    let safeDpr = Math.min(dpr, MAX_REPLAY_DEVICE_PIXEL_RATIO);
+
     if (cssWidth >= LARGE_REPLAY_CANVAS_CSS_WIDTH) {
-      return Math.min(MIN_REPLAY_DEVICE_PIXEL_RATIO, MAX_REPLAY_DEVICE_PIXEL_RATIO);
+      safeDpr = Math.min(safeDpr, 0.8);
     }
-    return Math.min(dpr, MAX_REPLAY_DEVICE_PIXEL_RATIO);
+
+    if (cssWidth > 0 && MAX_CANVAS_PIXEL_WIDTH > 0) {
+      const pixelBoundDpr = MAX_CANVAS_PIXEL_WIDTH / cssWidth;
+      if (Number.isFinite(pixelBoundDpr) && pixelBoundDpr > 0) {
+        safeDpr = Math.min(safeDpr, pixelBoundDpr);
+      }
+    }
+
+    return Math.max(MIN_REPLAY_DEVICE_PIXEL_RATIO, safeDpr);
   }
 
   return Math.min(dpr, MAX_DEVICE_PIXEL_RATIO);
@@ -764,7 +785,7 @@ function drawChartInstance(instanceLike = null) {
         pxPerPoint <= 3 ? 0 :
         pxPerPoint <= 5 ? 1 : 2;
 
-      if (pointRadius > 0) {
+      if (state.mode !== "replay" && pointRadius > 0) {
         ctx.fillStyle = s.color;
         for (let i = 0; i < arr.length; i += pointStep) {
           const v = arr[i];
@@ -818,7 +839,7 @@ function drawChartInstance(instanceLike = null) {
       }
     }
 
-    const axisTickCount = Math.min(6, totalSlots);
+    const axisTickCount = getReplayAxisTickCount(state, totalSlots);
     ctx.fillStyle = "#6b7280";
     ctx.font = "11px Arial";
     ctx.textAlign = "center";
