@@ -159,7 +159,7 @@
 
     text = text
       .replace(/\u00A0/g, " ")
-      .replace(/^(dom|seg|ter|qua|qui|quin|quinta|sex|s[áa]b)\.?\s+/i, "")
+      .replace(/^(dom|seg|ter|quar|quin|sex|s[áa]b)\.?\s+/i, "")
       .replace(/\s+/g, " ")
       .trim();
 

@@ -1,9 +1,11 @@
-import io
-import json
+﻿import json
+import itertools
 import mimetypes
 import os
+import re
 import time
 import threading
+import unicodedata
 import uuid
 from bisect import bisect_left
 from collections import deque
@@ -13,7 +15,9 @@ from urllib.parse import urlparse, unquote, parse_qs
 from pathlib import Path
 
 import requests
-from openpyxl import load_workbook, Workbook
+
+from xlsx_stream_reader import XlsxStreamReader
+from xlsx_stream_writer import StreamingXlsxWorkbook
 
 # -----------------------------
 # Config
@@ -141,7 +145,7 @@ def normalize_bool_like(v):
     s = str(v).strip().lower()
     if s in {"ligado", "on", "true", "sim"}:
         return 1
-    if s in {"desligado", "off", "false", "nao", "não"}:
+    if s in {"desligado", "off", "false", "nao", "n\u00e3o"}:
         return 0
     return None
 
@@ -284,7 +288,7 @@ def load_dashboard_html() -> str:
     <!doctype html>
     <html lang="pt-br">
     <head><meta charset="utf-8" /><title>Monitor Rastreasul</title></head>
-    <body><h2>index.html não encontrado</h2><p>Arquivo esperado em: {HTML_PATH}</p></body>
+    <body><h2>index.html nÃ£o encontrado</h2><p>Arquivo esperado em: {HTML_PATH}</p></body>
     </html>
     """
 
@@ -396,17 +400,40 @@ ROUND_2_COLUMNS_TREATMENT = {
 }
 
 ANALYSIS_HEADERS_TREATMENT = [
-    "dia-mês",
+    "dia-m\u00eas",
     "Faixa Verde",
-    "Trânsito (Velocidade)",
-    "Trânsito (RPM)",
-    "Aceleração",
+    "Tr\u00e2nsito (Velocidade)",
+    "Tr\u00e2nsito (RPM)",
+    "Acelera\u00e7\u00e3o",
     "Frenagens",
     "Nota Rota",
-    "Soma Pontuação",
+    "Soma Pontua\u00e7\u00e3o",
     "Nota Motorista",
     "Viagem",
 ]
+NUMBER_TOKEN_PATTERN_TREATMENT = re.compile(r"-?\d[\d.,]*")
+ILLEGAL_XML_CHARACTERS_TREATMENT = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F\uFFFE\uFFFF]")
+PROGRESS_UPDATE_EVERY_TREATMENT = int(os.getenv("PROGRESS_UPDATE_EVERY_TREATMENT", "250"))
+TREATMENT_HEADER_SCAN_LIMIT = int(os.getenv("TREATMENT_HEADER_SCAN_LIMIT", "200"))
+DATE_FORMATS_SLASH_WITH_TIME_4_TREATMENT = ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M")
+DATE_FORMATS_SLASH_WITH_TIME_2_TREATMENT = ("%d/%m/%y %H:%M:%S", "%d/%m/%y %H:%M")
+DATE_FORMATS_SLASH_DATE_4_TREATMENT = ("%d/%m/%Y",)
+DATE_FORMATS_SLASH_DATE_2_TREATMENT = ("%d/%m/%y",)
+DATE_FORMATS_DASH_WITH_TIME_TREATMENT = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M")
+DATE_FORMATS_DASH_DATE_TREATMENT = ("%Y-%m-%d",)
+WEEKDAY_PREFIXES_TREATMENT = {
+    "dom", "domingo",
+    "seg", "segunda", "segunda-feira", "segundafeira",
+    "ter", "terca", "terca-feira", "tercafeira",
+    "qua", "quar", "quarta", "quarta-feira", "quartafeira",
+    "qui", "quin", "quinta", "quinta-feira", "quintafeira",
+    "sex", "sexta", "sexta-feira", "sextafeira",
+    "sab", "sabado", "sabado-feira",
+}
+TREATMENT_DEBUG_ROWS = os.getenv("TREATMENT_DEBUG_ROWS", "0") == "1"
+TREATMENT_DEBUG_ROW_SAMPLE_LIMIT = int(os.getenv("TREATMENT_DEBUG_ROW_SAMPLE_LIMIT", "10"))
+TREATMENT_DEBUG_XML_ROWS = os.getenv("TREATMENT_DEBUG_XML_ROWS", "0") == "1"
+TREATMENT_DEBUG_XML_ROW_LIMIT = int(os.getenv("TREATMENT_DEBUG_XML_ROW_LIMIT", "5"))
 
 
 def cleanup_old_treatment_jobs(max_age_seconds: int = 3600):
@@ -417,17 +444,19 @@ def cleanup_old_treatment_jobs(max_age_seconds: int = 3600):
         for job_id, meta in list(TREATMENT_JOBS.items()):
             created_at = float(meta.get("created_at", 0))
             if now - created_at > max_age_seconds:
-                to_delete.append((job_id, meta.get("path")))
+                to_delete.append((job_id, meta))
 
         for job_id, _ in to_delete:
             TREATMENT_JOBS.pop(job_id, None)
 
-    for _, path in to_delete:
-        try:
-            if path:
-                Path(path).unlink(missing_ok=True)
-        except Exception:
-            pass
+    for _, meta in to_delete:
+        for key in ("path",):
+            try:
+                path = meta.get(key)
+                if path:
+                    Path(path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
     status_delete = []
     with TREATMENT_STATUS_LOCK:
@@ -447,15 +476,17 @@ def cleanup_old_treatment_jobs(max_age_seconds: int = 3600):
                 pass
 
 
-def register_treatment_job(file_path: Path, download_name: str, job_id: str | None = None):
+def register_treatment_job(file_path: Path, download_name: str, job_id: str | None = None, **extra_meta):
     cleanup_old_treatment_jobs()
     job_id = job_id or uuid.uuid4().hex
     with TREATMENT_JOBS_LOCK:
-        TREATMENT_JOBS[job_id] = {
+        meta = {
             "path": str(file_path),
             "download_name": download_name,
             "created_at": time.time(),
         }
+        meta.update(extra_meta)
+        TREATMENT_JOBS[job_id] = meta
     return job_id
 
 
@@ -479,7 +510,7 @@ def create_treatment_status(job_id: str, kind: str, filename: str, input_path: P
             "input_path": str(input_path),
             "progress": {
                 "phase": "upload_received",
-                "message": "Upload concluído. Preparando processamento...",
+                "message": "Upload conclu\u00eddo. Preparando processamento...",
                 "current": None,
                 "total": None,
             },
@@ -498,15 +529,25 @@ def update_treatment_status(job_id: str, **fields):
         return dict(current)
 
 
-def update_treatment_progress(job_id: str, phase: str, message: str, current=None, total=None, status: str | None = None):
-    payload = {
-        "progress": {
-            "phase": phase,
-            "message": message,
-            "current": current,
-            "total": total,
-        }
+def update_treatment_progress(
+    job_id: str,
+    phase: str,
+    message: str,
+    current=None,
+    total=None,
+    status: str | None = None,
+    total_is_estimate: bool | None = None,
+):
+    progress = {
+        "phase": phase,
+        "message": message,
+        "current": current,
+        "total": total,
     }
+    if total_is_estimate is not None:
+        progress["total_is_estimate"] = total_is_estimate
+
+    payload = {"progress": progress}
     if status:
         payload["status"] = status
     return update_treatment_status(job_id, **payload)
@@ -527,7 +568,45 @@ def save_treatment_input_file(file_bytes: bytes, filename: str, job_id: str):
 
 
 def normalize_spaces_treatment(value):
-    return " ".join(str("" if value is None else value).replace("\u00A0", " ").split()).strip()
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        if not value:
+            return ""
+        text = ILLEGAL_XML_CHARACTERS_TREATMENT.sub(" ", value).replace("\u00A0", " ")
+        stripped = text.strip()
+        if not stripped:
+            return ""
+        if "  " not in stripped and "\t" not in stripped and "\n" not in stripped and "\r" not in stripped:
+            return stripped
+        return " ".join(stripped.split())
+    sanitized = ILLEGAL_XML_CHARACTERS_TREATMENT.sub(" ", str(value)).replace("\u00A0", " ")
+    return " ".join(sanitized.split()).strip()
+
+
+def strip_weekday_prefix_treatment(text):
+    if not text:
+        return text
+
+    parts = text.split(" ", 1)
+    if len(parts) < 2:
+        return text
+
+    prefix = normalize_key_treatment(parts[0].rstrip(".,;:-"))
+    if prefix in WEEKDAY_PREFIXES_TREATMENT:
+        return parts[1].strip()
+
+    return text
+
+
+def append_sheet_row_treatment(worksheet, values, source_line_number=None, context="arquivo de saida"):
+    try:
+        worksheet.append(values)
+    except Exception as exc:
+        location = f"linha {source_line_number}" if source_line_number is not None else "cabecalho"
+        raise ValueError(
+            f"Falha ao gravar {location} no {context}: {exc}"
+        ) from exc
 
 
 def normalize_header_treatment(value, fallback_index):
@@ -537,17 +616,8 @@ def normalize_header_treatment(value, fallback_index):
 
 def normalize_key_treatment(value):
     text = normalize_spaces_treatment(value).replace("*", "").lower()
-    replacements = {
-        "á": "a", "à": "a", "â": "a", "ã": "a",
-        "é": "e", "ê": "e",
-        "í": "i",
-        "ó": "o", "ô": "o", "õ": "o",
-        "ú": "u",
-        "ç": "c",
-    }
-    for src, dst in replacements.items():
-        text = text.replace(src, dst)
-    return text
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in text if not unicodedata.combining(ch))
 
 
 def make_unique_headers_treatment(headers):
@@ -563,28 +633,15 @@ def make_unique_headers_treatment(headers):
 def is_row_empty_treatment(row):
     if not isinstance(row, (list, tuple)):
         return True
-    return all(normalize_spaces_treatment(cell) == "" for cell in row)
-
-
-def worksheet_to_rows(ws):
-    rows = []
-    for row in ws.iter_rows(values_only=True):
-        rows.append(list(row))
-    return rows
-
-
-def find_header_in_worksheet_treatment(ws):
-    first_non_empty = None
-
-    for idx, row in enumerate(ws.iter_rows(values_only=True)):
-        row_values = list(row)
-        if isinstance(row_values, list) and any(normalize_key_treatment(cell) == "hora" for cell in row_values):
-            return idx, row_values
-
-        if first_non_empty is None and not is_row_empty_treatment(row_values):
-            first_non_empty = (idx, row_values)
-
-    return first_non_empty or (-1, [])
+    for cell in row:
+        if cell is None:
+            continue
+        if isinstance(cell, str):
+            if normalize_spaces_treatment(cell) != "":
+                return False
+            continue
+        return False
+    return True
 
 
 def build_output_headers_treatment(headers, key_map):
@@ -602,15 +659,44 @@ def build_output_headers_treatment(headers, key_map):
     return output_headers
 
 
-def normalize_cell_for_treatment(raw_value, key):
-    if key == "hora":
+def build_analysis_headers_treatment(treated_headers):
+    analysis_keys = {normalize_key_treatment(header) for header in ANALYSIS_HEADERS_TREATMENT}
+    renamed_headers = []
+
+    for header in treated_headers:
+        if normalize_key_treatment(header) in analysis_keys:
+            renamed_headers.append(f"{header} Original")
+        else:
+            renamed_headers.append(header)
+
+    return make_unique_headers_treatment(renamed_headers + ANALYSIS_HEADERS_TREATMENT)
+
+
+def build_column_modes_treatment(key_map):
+    modes = []
+    for key in key_map:
+        if key == "agrupamento":
+            modes.append("skip")
+        elif key == "hora":
+            modes.append("hour")
+        elif key in NUMERIC_COLUMNS_TREATMENT:
+            modes.append("numeric")
+        else:
+            modes.append("text")
+    return modes
+
+
+def normalize_cell_for_treatment(raw_value, key, mode=None):
+    mode = mode or key
+
+    if mode == "hour":
         parsed = parse_brazil_datetime_treatment(raw_value)
         return (
             format_datetime_br_treatment(parsed) if parsed else normalize_spaces_treatment(raw_value),
             int(parsed.timestamp()) if parsed else "",
         )
 
-    if key in NUMERIC_COLUMNS_TREATMENT:
+    if mode == "numeric":
         numeric = to_number_maybe_treatment(raw_value)
         if isinstance(numeric, (int, float)):
             return round_if_needed_treatment(numeric, key)
@@ -622,34 +708,36 @@ def normalize_cell_for_treatment(raw_value, key):
     return normalize_spaces_treatment(raw_value)
 
 
-def transform_row_values_treatment(row, headers, key_map, source_line_number):
+def transform_row_values_treatment(row, key_map, column_modes, source_line_number):
     output_values = []
     has_any_data = False
+    row_len = len(row)
+    append_value = output_values.append
 
-    for col_index, key in enumerate(key_map):
-        raw_value = row[col_index] if col_index < len(row) else None
-        header = headers[col_index]
-
-        if key == "agrupamento":
+    for col_index, mode in enumerate(column_modes):
+        if mode == "skip":
             continue
 
-        if key == "hora":
-            hour_value, hour_unix = normalize_cell_for_treatment(raw_value, key)
-            output_values.append(hour_value)
-            output_values.append(hour_unix)
+        raw_value = row[col_index] if col_index < row_len else None
+        key = key_map[col_index]
+
+        if mode == "hour":
+            hour_value, hour_unix = normalize_cell_for_treatment(raw_value, key, mode)
+            append_value(hour_value)
+            append_value(hour_unix)
             if hour_value != "" or hour_unix != "":
                 has_any_data = True
             continue
 
-        cell_value = normalize_cell_for_treatment(raw_value, key)
-        output_values.append(cell_value)
+        cell_value = normalize_cell_for_treatment(raw_value, key, mode)
+        append_value(cell_value)
         if cell_value != "":
             has_any_data = True
 
     if not has_any_data:
         return None
 
-    output_values.append(source_line_number)
+    append_value(source_line_number)
     return output_values
 
 
@@ -657,45 +745,110 @@ def make_preview_row_treatment(headers, values):
     return {header: value for header, value in zip(headers, values)}
 
 
-def prepare_treatment_stream(ws):
-    header_index, header_row = find_header_in_worksheet_treatment(ws)
-    if header_index < 0:
-        raise ValueError("Não foi possível localizar o cabeçalho.")
-
+def build_stream_meta_from_header_row_treatment(header_row):
     raw_headers = [normalize_header_treatment(value, idx) for idx, value in enumerate(header_row or [])]
     headers = make_unique_headers_treatment(raw_headers)
     key_map = [normalize_key_treatment(header) for header in headers]
+    column_modes = build_column_modes_treatment(key_map)
     output_headers = build_output_headers_treatment(headers, key_map)
-
     return {
-        "header_index": header_index,
         "headers": headers,
         "key_map": key_map,
+        "column_modes": column_modes,
         "output_headers": output_headers,
     }
 
 
-def iter_processed_rows_treatment_from_worksheet(ws, stream_meta):
-    header_index = stream_meta["header_index"]
-    headers = stream_meta["headers"]
-    key_map = stream_meta["key_map"]
+def count_non_empty_cells_treatment(row_values):
+    count = 0
+    for cell in row_values:
+        if isinstance(cell, str):
+            if normalize_spaces_treatment(cell) != "":
+                count += 1
+        elif cell is not None:
+            count += 1
+    return count
 
-    for row_index, row in enumerate(ws.iter_rows(values_only=True)):
-        if row_index <= header_index:
-            continue
-        if is_row_empty_treatment(row):
-            continue
 
-        transformed = transform_row_values_treatment(
-            row=row,
-            headers=headers,
-            key_map=key_map,
-            source_line_number=row_index + 1,
+def sample_row_iter_treatment(row_iter, limit):
+    sampled_rows = []
+    if limit <= 0:
+        return sampled_rows, row_iter
+
+    iterator = iter(row_iter)
+    for _ in range(limit):
+        try:
+            sampled_rows.append(next(iterator))
+        except StopIteration:
+            break
+    return sampled_rows, itertools.chain(sampled_rows, iterator)
+
+
+def log_rows_sample_treatment(label, sampled_rows):
+    if not TREATMENT_DEBUG_ROWS:
+        return
+    for row_index, row_values in sampled_rows:
+        print(
+            f"[treatment-debug][rows-sample][{label}] "
+            f"row_index={row_index} len={len(row_values)} "
+            f"values={repr(row_values[:10])}",
+            flush=True,
         )
-        if transformed is None:
+
+
+def log_header_debug_treatment(label, header_index, header_row, buffered_rows):
+    if not TREATMENT_DEBUG_ROWS:
+        return
+    print(
+        f"[treatment-debug][header][{label}] "
+        f"header_index={header_index} len={len(header_row)} "
+        f"header={repr(header_row[:20])} buffered_rows={len(buffered_rows)}",
+        flush=True,
+    )
+
+
+def log_xml_rows_debug_treatment(label, reader, sheet_path):
+    if not TREATMENT_DEBUG_XML_ROWS:
+        return
+    for row in reader.debug_sheet_xml_rows(sheet_path, max_rows=TREATMENT_DEBUG_XML_ROW_LIMIT):
+        print(f"[treatment-debug][xml-rows][{label}] {repr(row)}", flush=True)
+
+
+def resolve_header_from_row_iter_treatment(row_iter, preferred_keys=None, scan_limit=TREATMENT_HEADER_SCAN_LIMIT):
+    preferred_keys = preferred_keys or set()
+    scanned_rows = []
+    best_preferred_idx = None
+    best_preferred_score = -1
+
+    for row_index, row in row_iter:
+        row_values = list(row)
+        if is_row_empty_treatment(row_values):
             continue
 
-        yield transformed
+        scanned_rows.append((row_index, row_values))
+        if preferred_keys and any(normalize_key_treatment(cell) in preferred_keys for cell in row_values):
+            non_empty_score = count_non_empty_cells_treatment(row_values)
+            if non_empty_score > best_preferred_score:
+                best_preferred_score = non_empty_score
+                best_preferred_idx = len(scanned_rows) - 1
+
+        if len(scanned_rows) >= scan_limit:
+            break
+
+    if not scanned_rows:
+        return -1, [], []
+
+    if best_preferred_idx is not None:
+        header_index, header_row = scanned_rows[best_preferred_idx]
+        return header_index, header_row, scanned_rows[best_preferred_idx + 1:]
+
+    header_index, header_row = scanned_rows[0]
+    return header_index, header_row, scanned_rows[1:]
+
+
+def append_preview_row_treatment(preview_rows, headers, values):
+    if len(preview_rows) < PREVIEW_LIMIT:
+        preview_rows.append(make_preview_row_treatment(headers, values))
 
 
 def excel_serial_to_datetime_treatment(value):
@@ -721,18 +874,22 @@ def parse_brazil_datetime_treatment(value):
     text = normalize_spaces_treatment(value)
     if not text:
         return None
+    text = strip_weekday_prefix_treatment(text)
 
-    for fmt in (
-        "%d/%m/%Y %H:%M:%S",
-        "%d/%m/%Y %H:%M",
-        "%d/%m/%y %H:%M:%S",
-        "%d/%m/%y %H:%M",
-        "%d/%m/%Y",
-        "%d/%m/%y",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d",
-    ):
+    if "/" in text:
+        if " " in text:
+            date_part = text.split(" ", 1)[0]
+            year_len = len(date_part.rsplit("/", 1)[-1])
+            formats = DATE_FORMATS_SLASH_WITH_TIME_4_TREATMENT if year_len == 4 else DATE_FORMATS_SLASH_WITH_TIME_2_TREATMENT
+        else:
+            year_len = len(text.rsplit("/", 1)[-1])
+            formats = DATE_FORMATS_SLASH_DATE_4_TREATMENT if year_len == 4 else DATE_FORMATS_SLASH_DATE_2_TREATMENT
+    elif "-" in text:
+        formats = DATE_FORMATS_DASH_WITH_TIME_TREATMENT if " " in text else DATE_FORMATS_DASH_DATE_TREATMENT
+    else:
+        return None
+
+    for fmt in formats:
         try:
             return datetime.strptime(text, fmt)
         except Exception:
@@ -751,7 +908,7 @@ def token_to_number_treatment(token):
     if token is None:
         return None
 
-    value = str(token).replace("−", "-").strip()
+    value = str(token).replace("\u2212", "-").strip()
     if not value:
         return None
 
@@ -792,17 +949,28 @@ def to_number_maybe_treatment(value):
     if not original:
         return ""
 
-    import re
-    candidates = re.findall(r"-?\d[\d.,]*", original)
-    if not candidates:
+    if any(ch.isdigit() for ch in original):
+        simple_candidate = original.replace("\u2212", "-").replace(" ", "")
+        if all(ch.isdigit() or ch in "-.,+" for ch in simple_candidate):
+            num = token_to_number_treatment(simple_candidate)
+            return num if num is not None else original
+    else:
         return original
 
-    candidates = sorted(
-        candidates,
-        key=lambda x: (len([d for d in x if d.isdigit()]), len(x)),
-        reverse=True,
-    )
-    num = token_to_number_treatment(candidates[0])
+    best_candidate = None
+    best_score = (-1, -1)
+    for match in NUMBER_TOKEN_PATTERN_TREATMENT.finditer(original):
+        candidate = match.group(0)
+        digit_count = sum(ch.isdigit() for ch in candidate)
+        score = (digit_count, len(candidate))
+        if score > best_score:
+            best_candidate = candidate
+            best_score = score
+
+    if not best_candidate:
+        return original
+
+    num = token_to_number_treatment(best_candidate)
     return num if num is not None else original
 
 
@@ -814,132 +982,172 @@ def round_if_needed_treatment(value, key):
     return round(float(value), 2)
 
 
-def find_header_index_treatment(sheet_rows):
-    for idx, row in enumerate(sheet_rows):
-        if isinstance(row, (list, tuple)) and any(normalize_key_treatment(cell) == "hora" for cell in row):
-            return idx
-
-    for idx, row in enumerate(sheet_rows):
-        if isinstance(row, (list, tuple)) and not is_row_empty_treatment(row):
-            return idx
-
-    return -1
+def estimate_data_rows_treatment(total_rows_hint, header_index):
+    if not isinstance(total_rows_hint, int) or total_rows_hint <= 0:
+        return None
+    return max(0, total_rows_hint - header_index - 1)
 
 
-def process_sheet_rows_treatment(sheet_rows):
-    if not sheet_rows:
-        raise ValueError("A planilha não possui dados válidos.")
 
-    header_index = find_header_index_treatment(sheet_rows)
+
+
+
+
+def process_streaming_rows_treatment(
+    row_iter,
+    total_rows_hint,
+    output_ws,
+    preferred_header_keys,
+    progress_cb=None,
+    progress_phase="processing_rows",
+    progress_message="Tratando linhas da planilha...",
+    debug_label="mensagens",
+):
+    header_index, header_row, buffered_rows = resolve_header_from_row_iter_treatment(
+        row_iter,
+        preferred_keys=preferred_header_keys,
+    )
     if header_index < 0:
-        raise ValueError("Não foi possível localizar o cabeçalho.")
+        raise ValueError("N\u00e3o foi poss\u00edvel localizar o cabe\u00e7alho.")
+    log_header_debug_treatment(debug_label, header_index, header_row, buffered_rows)
 
-    header_row = sheet_rows[header_index] or []
-    raw_headers = [normalize_header_treatment(value, idx) for idx, value in enumerate(header_row)]
-    headers = make_unique_headers_treatment(raw_headers)
-    key_map = [normalize_key_treatment(header) for header in headers]
+    stream_meta = build_stream_meta_from_header_row_treatment(header_row)
+    headers = stream_meta["output_headers"]
+    key_map = stream_meta["key_map"]
+    column_modes = stream_meta["column_modes"]
+    total_estimate = estimate_data_rows_treatment(total_rows_hint, header_index)
+    append_sheet_row_treatment(output_ws, headers, context="arquivo tratado")
 
-    data_rows = [row for row in sheet_rows[header_index + 1:] if not is_row_empty_treatment(row)]
-    treated_rows = []
+    preview_rows = []
+    row_count = 0
 
-    for row_index, row in enumerate(data_rows):
-        obj = {}
-        has_any_data = False
+    def consume(row_index, row_values):
+        nonlocal row_count
+        if is_row_empty_treatment(row_values):
+            return
 
-        for col_index, header in enumerate(headers):
-            raw_value = row[col_index] if col_index < len(row) else None
-            key = key_map[col_index]
+        transformed = transform_row_values_treatment(
+            row=row_values,
+            key_map=key_map,
+            column_modes=column_modes,
+            source_line_number=row_index + 1,
+        )
+        if transformed is None:
+            return
 
-            if key == "agrupamento":
-                continue
+        append_sheet_row_treatment(
+            output_ws,
+            transformed,
+            source_line_number=row_index + 1,
+            context="arquivo tratado",
+        )
+        row_count += 1
+        append_preview_row_treatment(preview_rows, headers, transformed)
+        if progress_cb and (row_count == 1 or row_count % PROGRESS_UPDATE_EVERY_TREATMENT == 0):
+            progress_cb(
+                progress_phase,
+                progress_message,
+                current=row_count,
+                total=total_estimate,
+                total_is_estimate=True,
+            )
 
-            if key == "hora":
-                parsed = parse_brazil_datetime_treatment(raw_value)
-                obj[header] = format_datetime_br_treatment(parsed) if parsed else normalize_spaces_treatment(raw_value)
-                obj["Hora Unix"] = int(parsed.timestamp()) if parsed else ""
-                if obj[header] != "" or obj["Hora Unix"] != "":
-                    has_any_data = True
-                continue
+    for row_index, row_values in buffered_rows:
+        consume(row_index, row_values)
 
-            if key in NUMERIC_COLUMNS_TREATMENT:
-                numeric = to_number_maybe_treatment(raw_value)
-                obj[header] = round_if_needed_treatment(numeric, key) if isinstance(numeric, (int, float)) else numeric
-                if obj[header] != "":
-                    has_any_data = True
-                continue
+    for row_index, row_values in row_iter:
+        consume(row_index, row_values)
 
-            if isinstance(raw_value, datetime):
-                obj[header] = format_datetime_br_treatment(raw_value)
-            else:
-                obj[header] = normalize_spaces_treatment(raw_value)
-
-            if obj[header] != "":
-                has_any_data = True
-
-        if not has_any_data:
-            continue
-
-        obj["Linha Origem"] = header_index + row_index + 2
-        treated_rows.append(obj)
-
-    if not treated_rows:
-        raise ValueError("Nenhuma linha válida foi encontrada para tratamento.")
+    if row_count == 0:
+        raise ValueError("Nenhuma linha v\u00e1lida foi encontrada para tratamento.")
 
     return {
-        "headers": list(treated_rows[0].keys()),
-        "rows": treated_rows,
+        "stream_meta": stream_meta,
+        "headers": headers,
+        "preview_rows": preview_rows,
+        "row_count": row_count,
+        "total_estimate": total_estimate,
     }
 
 
-def find_sheet_name_treatment(workbook, desired_name):
-    if desired_name in workbook.sheetnames:
-        return desired_name
+def process_trips_rows_treatment(row_iter, total_rows_hint, output_ws=None, progress_cb=None):
+    header_index, header_row, buffered_rows = resolve_header_from_row_iter_treatment(
+        row_iter,
+        preferred_keys={"inicio", "fim"},
+    )
+    if header_index < 0:
+        return {"headers": [], "trips": [], "row_count": 0, "total_estimate": None}
 
-    normalized_target = normalize_key_treatment(desired_name)
-    for name in workbook.sheetnames:
-        if normalize_key_treatment(name) == normalized_target:
-            return name
+    stream_meta = build_stream_meta_from_header_row_treatment(header_row)
+    headers = stream_meta["output_headers"]
+    key_map = stream_meta["key_map"]
+    column_modes = stream_meta["column_modes"]
+    total_estimate = estimate_data_rows_treatment(total_rows_hint, header_index)
+    if output_ws is not None:
+        append_sheet_row_treatment(output_ws, headers, context="arquivo de viagens")
 
-    return None
-
-
-def process_trips_sheet_rows_treatment(sheet_rows):
-    if not sheet_rows:
-        return {"headers": [], "rows": [], "trips": []}
-
-    treated = process_sheet_rows_treatment(sheet_rows)
-    headers = treated["headers"]
-
-    start_header = next((h for h in headers if normalize_key_treatment(h) in {"inicio", "início"}), None)
-    end_header = next((h for h in headers if normalize_key_treatment(h) == "fim"), None)
-
-    if not start_header or not end_header:
-        return {"headers": treated["headers"], "rows": treated["rows"], "trips": []}
-
+    start_idx = resolve_header_index_treatment(headers, ["Inicio"])
+    end_idx = resolve_header_index_treatment(headers, ["Fim"])
     trips = []
-    for row in treated["rows"]:
-        start_date = parse_brazil_datetime_treatment(row.get(start_header))
-        end_date = parse_brazil_datetime_treatment(row.get(end_header))
-        if not start_date or not end_date:
-            continue
-        if end_date < start_date:
-            continue
-        trips.append({"start": start_date, "end": end_date})
+    row_count = 0
 
-    trips.sort(key=lambda item: item["start"])
+    def consume(row_index, row_values):
+        nonlocal row_count
+        if is_row_empty_treatment(row_values):
+            return
 
+        transformed = transform_row_values_treatment(
+            row=row_values,
+            key_map=key_map,
+            column_modes=column_modes,
+            source_line_number=row_index + 1,
+        )
+        if transformed is None:
+            return
+
+        if output_ws is not None:
+            append_sheet_row_treatment(
+                output_ws,
+                transformed,
+                source_line_number=row_index + 1,
+                context="arquivo de viagens",
+            )
+
+        row_count += 1
+        if progress_cb and (row_count == 1 or row_count % PROGRESS_UPDATE_EVERY_TREATMENT == 0):
+            progress_cb(
+                "reading_trips",
+                "Lendo aba Horas de motor...",
+                current=row_count,
+                total=total_estimate,
+                total_is_estimate=True,
+            )
+
+        if start_idx is None or end_idx is None:
+            return
+
+        start_date = get_datetime_from_indexed_row_treatment(transformed, start_idx, None)
+        end_date = get_datetime_from_indexed_row_treatment(transformed, end_idx, None)
+        if not start_date or not end_date or end_date < start_date:
+            return
+        trips.append((start_date, end_date))
+
+    for row_index, row_values in buffered_rows:
+        consume(row_index, row_values)
+
+    for row_index, row_values in row_iter:
+        consume(row_index, row_values)
+
+    trips.sort(key=lambda item: item[0])
     return {
-        "headers": treated["headers"],
-        "rows": treated["rows"],
+        "headers": headers,
         "trips": [
-            {"id": f"Viagem {idx + 1}", "start": item["start"], "end": item["end"]}
-            for idx, item in enumerate(trips)
+            {"id": f"Viagem {idx + 1}", "start": start, "end": end}
+            for idx, (start, end) in enumerate(trips)
         ],
+        "row_count": row_count,
+        "total_estimate": total_estimate,
     }
-
-
-def get_preview_rows(rows):
-    return rows[:PREVIEW_LIMIT]
 
 
 def build_treatment_export_name(filename):
@@ -964,31 +1172,10 @@ def build_analysis_export_name(filename):
     return filename + "_tratado_analise.xlsx"
 
 
-def write_result_workbook(output_path: Path, sheets: list[tuple[str, list[str], list[dict]]]):
-    wb = Workbook(write_only=True)
-    first = True
-
-    for sheet_name, headers, rows in sheets:
-        ws = wb.create_sheet(title=(sheet_name or "Sheet1")[:31])
-        ws.append(headers)
-        for row in rows:
-            ws.append([row.get(header, "") for header in headers])
-
-        if first and "Sheet" in wb.sheetnames:
-            default_ws = wb["Sheet"]
-            wb.remove(default_ws)
-            first = False
-
-    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
-        wb.remove(wb["Sheet"])
-
-    wb.save(output_path)
-
-
 def score_intensity_label_treatment(value):
     if value == "Leve":
         return 2
-    if value in {"Médio", "Média"}:
+    if value in {"M\u00e9dio", "M\u00e9dia"}:
         return 1
     if value in {"Intenso", "Intensa"}:
         return 0
@@ -1012,7 +1199,7 @@ def calculate_sum_score_treatment(green_band, speed_transit, rpm_transit, accele
 def get_route_score_treatment(value):
     if value == "Intenso":
         return 10
-    if value in {"Médio", "Média"}:
+    if value in {"M\u00e9dio", "M\u00e9dia"}:
         return 6
     if value == "Leve":
         return 0
@@ -1039,7 +1226,7 @@ def classify_speed_transit_treatment(speed_value, config):
     if speed_value <= config["speedLowMax"]:
         return "Intenso"
     if speed_value <= config["speedMediumMax"]:
-        return "Médio"
+        return "M\u00e9dio"
     return "Leve"
 
 
@@ -1049,7 +1236,7 @@ def classify_rpm_transit_treatment(rpm_value, config):
     if rpm_value < config["rpmUsefulStart"] or rpm_value > config["rpmUsefulEnd"]:
         return "Intenso"
     if rpm_value < config["rpmLightStart"]:
-        return "Médio"
+        return "M\u00e9dio"
     return "Leve"
 
 
@@ -1059,7 +1246,7 @@ def classify_acceleration_treatment(accel_value, config):
     if accel_value <= config["accelLightMax"]:
         return "Leve"
     if accel_value <= config["accelMediumMax"]:
-        return "Média"
+        return "M\u00e9dia"
     return "Intensa"
 
 
@@ -1069,7 +1256,7 @@ def classify_brake_treatment(brake_count, config):
     if brake_count < config["brakeMediumMin"]:
         return "Leve"
     if brake_count < config["brakeIntenseMin"]:
-        return "Média"
+        return "M\u00e9dia"
     return "Intensa"
 
 
@@ -1081,7 +1268,7 @@ def is_brake_activated_treatment(value):
     normalized = normalize_key_treatment(value)
     if normalized in {"sim", "true", "on", "ativo", "acionado", "pressed"}:
         return True
-    if normalized in {"nao", "não", "false", "off", "inativo", "desacionado"}:
+    if normalized in {"nao", "n\u00e3o", "false", "off", "inativo", "desacionado"}:
         return False
     numeric = token_to_number_treatment(normalized)
     return (numeric or 0) > 0 if numeric is not None else False
@@ -1095,55 +1282,10 @@ def find_header_by_aliases_treatment(headers, aliases):
     return None
 
 
-def extract_numeric_from_row_treatment(row, header_names):
-    for header_name in header_names:
-        if not header_name:
-            continue
-        parsed = to_number_maybe_treatment(row.get(header_name))
-        if isinstance(parsed, (int, float)):
-            return parsed
-    return None
-
-
-def get_row_date_treatment(row, hour_header, hour_unix_header):
-    if hour_unix_header:
-        unix = extract_numeric_from_row_treatment(row, [hour_unix_header])
-        if isinstance(unix, (int, float)):
-            try:
-                return datetime.fromtimestamp(unix)
-            except Exception:
-                pass
-
-    if hour_header:
-        return parse_brazil_datetime_treatment(row.get(hour_header))
-
-    return None
-
-
 def format_day_month_treatment(date):
     if not isinstance(date, datetime):
         return ""
     return date.strftime("%d/%m")
-
-
-def find_trip_id_treatment(row_date, trips):
-    if not isinstance(row_date, datetime) or not trips:
-        return ""
-
-    row_ts = row_date.timestamp()
-    trip_starts = [trip["start"].timestamp() for trip in trips]
-    idx = bisect_left(trip_starts, row_ts)
-    candidates = []
-
-    if idx < len(trips):
-        candidates.append(trips[idx])
-    if idx > 0:
-        candidates.append(trips[idx - 1])
-
-    for trip in candidates:
-        if trip["start"].timestamp() <= row_ts <= trip["end"].timestamp():
-            return trip["id"]
-    return ""
 
 
 def resolve_header_index_treatment(headers, aliases):
@@ -1216,122 +1358,95 @@ def find_trip_id_with_index_treatment(row_date, indexed_trips, trip_starts):
     return ""
 
 
-def build_analysis_rows_treatment(rows, headers, trips, config):
-    hour_header = find_header_by_aliases_treatment(headers, ["Hora"])
-    hour_unix_header = find_header_by_aliases_treatment(headers, ["Hora Unix", "HoraUnix"])
-    rpm_header = find_header_by_aliases_treatment(headers, ["RPM"])
-    speed_header = find_header_by_aliases_treatment(headers, ["Velocidade_2", "Velocidade"])
-    accel_header = find_header_by_aliases_treatment(headers, ["Acelerador"])
-    brake_header = find_header_by_aliases_treatment(headers, ["Freio"])
-
-    recent_brake_events = []
-    previous_brake_active = False
-    analysis_rows = []
-
-    for row in rows:
-        current_date = get_row_date_treatment(row, hour_header, hour_unix_header)
-        current_ts = current_date.timestamp() if current_date else None
-        rpm_value = extract_numeric_from_row_treatment(row, [rpm_header])
-        speed_value = extract_numeric_from_row_treatment(row, [speed_header])
-        accel_value = extract_numeric_from_row_treatment(row, [accel_header])
-        brake_active = is_brake_activated_treatment(row.get(brake_header)) if brake_header else False
-
-        if current_ts is not None:
-            recent_brake_events = [x for x in recent_brake_events if x >= current_ts - 60]
-            if brake_active and not previous_brake_active:
-                recent_brake_events.append(current_ts)
-
-        speed_transit = classify_speed_transit_treatment(speed_value, config)
-        note_route = get_route_score_treatment(speed_transit)
-        brake_count = len(recent_brake_events) if current_ts is not None and brake_header else None
-        brake_label = classify_brake_treatment(brake_count, config)
-        green_band = classify_green_band_treatment(rpm_value, config)
-        rpm_transit = classify_rpm_transit_treatment(rpm_value, config)
-        acceleration_label = classify_acceleration_treatment(accel_value, config)
-        sum_score = calculate_sum_score_treatment(
-            green_band=green_band,
-            speed_transit=speed_transit,
-            rpm_transit=rpm_transit,
-            acceleration=acceleration_label,
-            brakes=brake_label,
-        )
-        driver_score = calculate_driver_score_treatment(sum_score, note_route)
-        trip_id = find_trip_id_treatment(current_date, trips)
-
-        previous_brake_active = brake_active
-
-        merged = dict(row)
-        merged.update({
-            "dia-mês": format_day_month_treatment(current_date),
-            "Faixa Verde": green_band,
-            "Trânsito (Velocidade)": speed_transit,
-            "Trânsito (RPM)": rpm_transit,
-            "Aceleração": acceleration_label,
-            "Frenagens": brake_label,
-            "Nota Rota": note_route,
-            "Soma Pontuação": sum_score,
-            "Nota Motorista": driver_score,
-            "Viagem": trip_id,
-        })
-        analysis_rows.append(merged)
-
-    base_headers = [h for h in headers if h not in ANALYSIS_HEADERS_TREATMENT]
-    analysis_headers = base_headers + ANALYSIS_HEADERS_TREATMENT
-    return analysis_headers, analysis_rows
-
-
-def process_treatment_file_bytes(file_bytes: bytes, filename: str, job_id: str | None = None, progress_cb=None):
+def process_treatment_file_treatment(
+    filename: str,
+    input_path: Path,
+    job_id: str | None = None,
+    progress_cb=None,
+):
     started_at = time.perf_counter()
     if progress_cb:
-        progress_cb("opening_workbook", "Abrindo planilha...")
-    wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
-    workbook_opened_at = time.perf_counter()
-    sheet_name = find_sheet_name_treatment(wb, REQUIRED_TREATMENT_SHEET)
-    if not sheet_name:
-        raise ValueError('A planilha obrigatória "Mensagens" não foi encontrada no arquivo.')
-
-    ws = wb[sheet_name]
-    stream_meta = prepare_treatment_stream(ws)
-    headers = stream_meta["output_headers"]
+        progress_cb("parsing_container", "Lendo a estrutura do arquivo XLSX...")
 
     export_name = build_treatment_export_name(filename)
     output_path = TEMP_TREATMENT_DIR / f"{uuid.uuid4().hex}_{export_name}"
-    output_wb = Workbook(write_only=True)
-    output_ws = output_wb.create_sheet(title="Tratado")
-    output_ws.append(headers)
 
-    preview_rows = []
-    row_count = 0
-    if progress_cb:
-        progress_cb("processing_rows", "Tratando linhas da planilha...")
-    for row_values in iter_processed_rows_treatment_from_worksheet(ws, stream_meta):
-        output_ws.append(row_values)
-        row_count += 1
-        if len(preview_rows) < PREVIEW_LIMIT:
-            preview_rows.append(make_preview_row_treatment(headers, row_values))
-        if progress_cb and row_count % 5000 == 0:
-            progress_cb("processing_rows", "Tratando linhas da planilha...", current=row_count, total=None)
+    try:
+        with StreamingXlsxWorkbook(output_path) as output_wb:
+            with XlsxStreamReader(input_path) as reader:
+                reader.load_container()
+                parse_completed_at = time.perf_counter()
 
-    if row_count == 0:
-        raise ValueError("Nenhuma linha válida foi encontrada para tratamento.")
+                sheet_name = reader.resolve_sheet_name(REQUIRED_TREATMENT_SHEET, normalize_key_treatment)
+                if not sheet_name:
+                    raise ValueError('A planilha obrigat\u00f3ria "Mensagens" n\u00e3o foi encontrada no arquivo.')
+                sheet_resolved_at = time.perf_counter()
 
-    if "Sheet" in output_wb.sheetnames:
-        output_wb.remove(output_wb["Sheet"])
-    if progress_cb:
-        progress_cb("writing_output", "Gerando arquivo final para download...", current=row_count, total=None)
-    output_wb.save(output_path)
-    processed_at = time.perf_counter()
+                sheet_path = reader.sheet_path_by_name[sheet_name]
+                total_rows_hint = reader.estimate_sheet_total_rows(sheet_path)
+                if TREATMENT_DEBUG_ROWS:
+                    print(
+                        f"[treatment-debug][sheet][mensagens] "
+                        f"sheet_name={sheet_name!r} sheet_path={sheet_path!r} total_rows_hint={total_rows_hint}",
+                        flush=True,
+                    )
+                log_xml_rows_debug_treatment("mensagens", reader, sheet_path)
+                sampled_rows, row_iter = sample_row_iter_treatment(reader.iter_rows(sheet_path), TREATMENT_DEBUG_ROW_SAMPLE_LIMIT)
+                log_rows_sample_treatment("mensagens", sampled_rows)
+                output_ws = output_wb.create_sheet(title="Tratado")
+                if progress_cb:
+                    progress_cb("processing_rows", "Tratando linhas da planilha...")
+                processed = process_streaming_rows_treatment(
+                    row_iter,
+                    total_rows_hint,
+                    output_ws,
+                    preferred_header_keys={"hora"},
+                    progress_cb=progress_cb,
+                    progress_phase="processing_rows",
+                    progress_message="Tratando linhas da planilha...",
+                    debug_label="mensagens",
+                )
+                shared_stats = reader.shared_strings_stats()
 
-    job_id = register_treatment_job(output_path, export_name, job_id=job_id)
+            process_completed_at = time.perf_counter()
+            headers = processed["headers"]
+            preview_rows = processed["preview_rows"]
+            row_count = processed["row_count"]
+            if progress_cb:
+                progress_cb("writing_output", "Finalizando arquivo para download...", current=row_count, total=row_count, total_is_estimate=False)
+            output_wb.save()
+            save_completed_at = time.perf_counter()
+    except Exception:
+        output_path.unlink(missing_ok=True)
+        raise
+
+    job_id = register_treatment_job(
+        output_path,
+        export_name,
+        job_id=job_id,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mode="xlsx_direct",
+        sheet_name="Tratado",
+    )
     finished_at = time.perf_counter()
+    total_seconds = finished_at - started_at
+    rows_per_second = (row_count / total_seconds) if total_seconds > 0 else 0.0
+    rows_per_minute = rows_per_second * 60.0
 
     print(
-        "[treatment] process_treatment "
-        f"open={workbook_opened_at - started_at:.2f}s "
-        f"process_write={processed_at - workbook_opened_at:.2f}s "
-        f"register={finished_at - processed_at:.2f}s "
-        f"total={finished_at - started_at:.2f}s "
-        f"rows={row_count}",
+        f"[treatment][job_id={job_id or '-'}][mode=xml_stream] process_treatment "
+        f"total={total_seconds:.2f}s "
+        f"parse_container={parse_completed_at - started_at:.2f}s "
+        f"resolve_sheet={sheet_resolved_at - parse_completed_at:.2f}s "
+        f"shared_strings_prepare={shared_stats['prepare_seconds']:.2f}s "
+        f"shared_strings_lookup={shared_stats['lookup_seconds']:.2f}s "
+        f"shared_strings_mode={shared_stats['mode']} "
+        f"shared_strings_count={shared_stats['count']} "
+        f"shared_strings_lookups={shared_stats['lookup_count']} "
+        f"process={process_completed_at - sheet_resolved_at:.2f}s "
+        f"save={save_completed_at - process_completed_at:.2f}s "
+        f"register={finished_at - save_completed_at:.2f}s "
+        f"rows={row_count} rps={rows_per_second:.2f} rpm={rows_per_minute:.2f}",
         flush=True,
     )
 
@@ -1348,145 +1463,215 @@ def process_treatment_file_bytes(file_bytes: bytes, filename: str, job_id: str |
     }
 
 
-def process_treatment_step1_file_bytes(file_bytes: bytes, filename: str, config: dict, job_id: str | None = None, progress_cb=None):
+def process_treatment_step1_treatment(
+    filename: str,
+    config: dict,
+    input_path: Path,
+    job_id: str | None = None,
+    progress_cb=None,
+):
     started_at = time.perf_counter()
     if progress_cb:
-        progress_cb("opening_workbook", "Abrindo planilha...")
-    wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
-    workbook_opened_at = time.perf_counter()
-
-    target_sheet_name = find_sheet_name_treatment(wb, REQUIRED_TREATMENT_SHEET)
-    if not target_sheet_name:
-        raise ValueError('A planilha obrigatória "Mensagens" não foi encontrada no arquivo.')
-
-    trips_sheet_name = find_sheet_name_treatment(wb, TRIPS_TREATMENT_SHEET)
-    trips_headers = []
-    trips_rows = []
-    trips = []
-
-    if trips_sheet_name:
-        if progress_cb:
-            progress_cb("processing_rows", "Lendo aba Horas de motor...")
-        treated_trips = process_trips_sheet_rows_treatment(worksheet_to_rows(wb[trips_sheet_name]))
-        trips_headers = treated_trips["headers"]
-        trips_rows = treated_trips["rows"]
-        trips = treated_trips["trips"]
-    trips_processed_at = time.perf_counter()
-
-    ws = wb[target_sheet_name]
-    stream_meta = prepare_treatment_stream(ws)
-    treated_headers = stream_meta["output_headers"]
-    analysis_headers = [header for header in treated_headers if header not in ANALYSIS_HEADERS_TREATMENT] + ANALYSIS_HEADERS_TREATMENT
-    indexed_trips, trip_starts = build_trip_search_index_treatment(trips)
+        progress_cb("parsing_container", "Lendo a estrutura do arquivo XLSX...")
 
     export_name = build_analysis_export_name(filename)
     output_path = TEMP_TREATMENT_DIR / f"{uuid.uuid4().hex}_{export_name}"
-    output_wb = Workbook(write_only=True)
-    analysis_ws = output_wb.create_sheet(title="Tratado Analise")
-    analysis_ws.append(analysis_headers)
 
-    hour_idx = resolve_header_index_treatment(treated_headers, ["Hora"])
-    hour_unix_idx = resolve_header_index_treatment(treated_headers, ["Hora Unix", "HoraUnix"])
-    rpm_idx = resolve_header_index_treatment(treated_headers, ["RPM"])
-    speed_idx = resolve_header_index_treatment(treated_headers, ["Velocidade_2", "Velocidade"])
-    accel_idx = resolve_header_index_treatment(treated_headers, ["Acelerador"])
-    brake_idx = resolve_header_index_treatment(treated_headers, ["Freio"])
+    try:
+        with StreamingXlsxWorkbook(output_path) as output_wb:
+            with XlsxStreamReader(input_path) as reader:
+                reader.load_container()
+                parse_completed_at = time.perf_counter()
 
-    recent_brake_events = []
-    previous_brake_active = False
-    preview_rows = []
-    row_count = 0
+                target_sheet_name = reader.resolve_sheet_name(REQUIRED_TREATMENT_SHEET, normalize_key_treatment)
+                if not target_sheet_name:
+                    raise ValueError('A planilha obrigat\u00f3ria "Mensagens" n\u00e3o foi encontrada no arquivo.')
+                trips_sheet_name = reader.resolve_sheet_name(TRIPS_TREATMENT_SHEET, normalize_key_treatment)
+                sheet_resolved_at = time.perf_counter()
 
-    if progress_cb:
-        progress_cb("processing_rows", "Tratando linhas da planilha com análise...")
-    for treated_values in iter_processed_rows_treatment_from_worksheet(ws, stream_meta):
-        current_date = get_datetime_from_indexed_row_treatment(
-            treated_values,
-            hour_idx,
-            hour_unix_idx,
-        )
-        current_ts = current_date.timestamp() if current_date else None
-        rpm_value = get_numeric_from_indexed_row_treatment(treated_values, rpm_idx)
-        speed_value = get_numeric_from_indexed_row_treatment(treated_values, speed_idx)
-        accel_value = get_numeric_from_indexed_row_treatment(treated_values, accel_idx)
-        brake_active = (
-            is_brake_activated_treatment(treated_values[brake_idx])
-            if brake_idx is not None and brake_idx < len(treated_values)
-            else False
-        )
+                analysis_ws = output_wb.create_sheet(title="Tratado Analise")
+                trips_ws = output_wb.create_sheet(title=(trips_sheet_name or TRIPS_TREATMENT_SHEET)[:31]) if trips_sheet_name else None
 
-        if current_ts is not None:
-            recent_brake_events = [ts for ts in recent_brake_events if ts >= current_ts - 60]
-            if brake_active and not previous_brake_active:
-                recent_brake_events.append(current_ts)
+                trips = []
+                if trips_sheet_name:
+                    trips_path = reader.sheet_path_by_name[trips_sheet_name]
+                    trips_processed = process_trips_rows_treatment(
+                        reader.iter_rows(trips_path),
+                        reader.estimate_sheet_total_rows(trips_path),
+                        output_ws=trips_ws,
+                        progress_cb=progress_cb,
+                    )
+                    trips = trips_processed["trips"]
+                trips_completed_at = time.perf_counter()
 
-        speed_transit = classify_speed_transit_treatment(speed_value, config)
-        note_route = get_route_score_treatment(speed_transit)
-        brake_count = len(recent_brake_events) if current_ts is not None and brake_idx is not None else None
-        brake_label = classify_brake_treatment(brake_count, config)
-        green_band = classify_green_band_treatment(rpm_value, config)
-        rpm_transit = classify_rpm_transit_treatment(rpm_value, config)
-        acceleration_label = classify_acceleration_treatment(accel_value, config)
-        sum_score = calculate_sum_score_treatment(
-            green_band=green_band,
-            speed_transit=speed_transit,
-            rpm_transit=rpm_transit,
-            acceleration=acceleration_label,
-            brakes=brake_label,
-        )
-        driver_score = calculate_driver_score_treatment(sum_score, note_route)
-        trip_id = find_trip_id_with_index_treatment(current_date, indexed_trips, trip_starts)
-        previous_brake_active = brake_active
+                sheet_path = reader.sheet_path_by_name[target_sheet_name]
+                if TREATMENT_DEBUG_ROWS:
+                    print(
+                        f"[treatment-debug][sheet][mensagens-step1] "
+                        f"sheet_name={target_sheet_name!r} sheet_path={sheet_path!r} "
+                        f"total_rows_hint={reader.estimate_sheet_total_rows(sheet_path)}",
+                        flush=True,
+                    )
+                log_xml_rows_debug_treatment("mensagens-step1", reader, sheet_path)
+                sampled_rows, row_iter = sample_row_iter_treatment(reader.iter_rows(sheet_path), TREATMENT_DEBUG_ROW_SAMPLE_LIMIT)
+                log_rows_sample_treatment("mensagens-step1", sampled_rows)
+                header_index, header_row, buffered_rows = resolve_header_from_row_iter_treatment(
+                    row_iter,
+                    preferred_keys={"hora"},
+                )
+                if header_index < 0:
+                    raise ValueError("N\u00e3o foi poss\u00edvel localizar o cabe\u00e7alho.")
+                log_header_debug_treatment("mensagens-step1", header_index, header_row, buffered_rows)
 
-        analysis_values = [
-            format_day_month_treatment(current_date),
-            green_band,
-            speed_transit,
-            rpm_transit,
-            acceleration_label,
-            brake_label,
-            note_route,
-            sum_score,
-            driver_score,
-            trip_id,
-        ]
-        output_values = treated_values + analysis_values
-        analysis_ws.append(output_values)
-        row_count += 1
+                stream_meta = build_stream_meta_from_header_row_treatment(header_row)
+                treated_headers = stream_meta["output_headers"]
+                analysis_headers = build_analysis_headers_treatment(treated_headers)
+                append_sheet_row_treatment(analysis_ws, analysis_headers, context="arquivo de analise")
 
-        if len(preview_rows) < PREVIEW_LIMIT:
-            preview_rows.append(make_preview_row_treatment(analysis_headers, output_values))
-        if progress_cb and row_count % 5000 == 0:
-            progress_cb("processing_rows", "Tratando linhas da planilha com análise...", current=row_count, total=None)
+                indexed_trips, trip_starts = build_trip_search_index_treatment(trips)
+                total_estimate = estimate_data_rows_treatment(reader.estimate_sheet_total_rows(sheet_path), header_index)
+                hour_idx = resolve_header_index_treatment(treated_headers, ["Hora"])
+                hour_unix_idx = resolve_header_index_treatment(treated_headers, ["Hora Unix", "HoraUnix"])
+                rpm_idx = resolve_header_index_treatment(treated_headers, ["RPM"])
+                speed_idx = resolve_header_index_treatment(treated_headers, ["Velocidade_2", "Velocidade"])
+                accel_idx = resolve_header_index_treatment(treated_headers, ["Acelerador"])
+                brake_idx = resolve_header_index_treatment(treated_headers, ["Freio"])
+                prepare_completed_at = time.perf_counter()
 
-    if row_count == 0:
-        raise ValueError("Nenhuma linha válida foi encontrada para tratamento.")
+                recent_brake_events = deque()
+                previous_brake_active = False
+                preview_rows = []
+                row_count = 0
 
-    if trips_sheet_name and trips_headers and trips_rows:
-        trips_ws = output_wb.create_sheet(title=(trips_sheet_name or "Sheet1")[:31])
-        trips_ws.append(trips_headers)
-        for row in trips_rows:
-            trips_ws.append([row.get(header, "") for header in trips_headers])
+                if progress_cb:
+                    progress_cb("processing_rows", "Tratando linhas da planilha com an\u00e1lise...")
 
-    if "Sheet" in output_wb.sheetnames:
-        output_wb.remove(output_wb["Sheet"])
-    if progress_cb:
-        progress_cb("writing_output", "Gerando arquivo final para download...", current=row_count, total=None)
-    output_wb.save(output_path)
-    processed_at = time.perf_counter()
+                def consume_main_row(row_index, row_values):
+                    nonlocal row_count, previous_brake_active
+                    if is_row_empty_treatment(row_values):
+                        return
 
-    job_id = register_treatment_job(output_path, export_name, job_id=job_id)
+                    treated_values = transform_row_values_treatment(
+                        row=row_values,
+                        key_map=stream_meta["key_map"],
+                        column_modes=stream_meta["column_modes"],
+                        source_line_number=row_index + 1,
+                    )
+                    if treated_values is None:
+                        return
+
+                    current_date = get_datetime_from_indexed_row_treatment(treated_values, hour_idx, hour_unix_idx)
+                    current_ts = current_date.timestamp() if current_date else None
+                    rpm_value = get_numeric_from_indexed_row_treatment(treated_values, rpm_idx)
+                    speed_value = get_numeric_from_indexed_row_treatment(treated_values, speed_idx)
+                    accel_value = get_numeric_from_indexed_row_treatment(treated_values, accel_idx)
+                    brake_active = (
+                        is_brake_activated_treatment(treated_values[brake_idx])
+                        if brake_idx is not None and brake_idx < len(treated_values)
+                        else False
+                    )
+
+                    if current_ts is not None:
+                        while recent_brake_events and recent_brake_events[0] < current_ts - 60:
+                            recent_brake_events.popleft()
+                        if brake_active and not previous_brake_active:
+                            recent_brake_events.append(current_ts)
+
+                    speed_transit = classify_speed_transit_treatment(speed_value, config)
+                    note_route = get_route_score_treatment(speed_transit)
+                    brake_count = len(recent_brake_events) if current_ts is not None and brake_idx is not None else None
+                    brake_label = classify_brake_treatment(brake_count, config)
+                    green_band = classify_green_band_treatment(rpm_value, config)
+                    rpm_transit = classify_rpm_transit_treatment(rpm_value, config)
+                    acceleration_label = classify_acceleration_treatment(accel_value, config)
+                    sum_score = calculate_sum_score_treatment(
+                        green_band=green_band,
+                        speed_transit=speed_transit,
+                        rpm_transit=rpm_transit,
+                        acceleration=acceleration_label,
+                        brakes=brake_label,
+                    )
+                    driver_score = calculate_driver_score_treatment(sum_score, note_route)
+                    trip_id = find_trip_id_with_index_treatment(current_date, indexed_trips, trip_starts)
+                    previous_brake_active = brake_active
+
+                    output_values = treated_values + [
+                        format_day_month_treatment(current_date),
+                        green_band,
+                        speed_transit,
+                        rpm_transit,
+                        acceleration_label,
+                        brake_label,
+                        note_route,
+                        sum_score,
+                        driver_score,
+                        trip_id,
+                    ]
+                    append_sheet_row_treatment(
+                        analysis_ws,
+                        output_values,
+                        source_line_number=row_index + 1,
+                        context="arquivo de analise",
+                    )
+                    row_count += 1
+                    append_preview_row_treatment(preview_rows, analysis_headers, output_values)
+                    if progress_cb and (row_count == 1 or row_count % PROGRESS_UPDATE_EVERY_TREATMENT == 0):
+                        progress_cb(
+                            "processing_rows",
+                            "Tratando linhas da planilha com an\u00e1lise...",
+                            current=row_count,
+                            total=total_estimate,
+                            total_is_estimate=True,
+                        )
+
+                for row_index, row_values in buffered_rows:
+                    consume_main_row(row_index, row_values)
+
+                for row_index, row_values in row_iter:
+                    consume_main_row(row_index, row_values)
+                shared_stats = reader.shared_strings_stats()
+
+            process_completed_at = time.perf_counter()
+            if row_count == 0:
+                raise ValueError("Nenhuma linha v\u00e1lida foi encontrada para tratamento.")
+
+            if progress_cb:
+                progress_cb("writing_output", "Finalizando arquivo para download...", current=row_count, total=row_count, total_is_estimate=False)
+            output_wb.save()
+            save_completed_at = time.perf_counter()
+    except Exception:
+        output_path.unlink(missing_ok=True)
+        raise
+
+    job_id = register_treatment_job(
+        output_path,
+        export_name,
+        job_id=job_id,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mode="xlsx_direct",
+        sheet_name="Tratado Analise",
+    )
     finished_at = time.perf_counter()
+    total_seconds = finished_at - started_at
+    rows_per_second = (row_count / total_seconds) if total_seconds > 0 else 0.0
+    rows_per_minute = rows_per_second * 60.0
 
     print(
-        "[treatment] process_treatment_step1 "
-        f"open={workbook_opened_at - started_at:.2f}s "
-        f"trips={trips_processed_at - workbook_opened_at:.2f}s "
-        f"process_write={processed_at - trips_processed_at:.2f}s "
-        f"register={finished_at - processed_at:.2f}s "
-        f"total={finished_at - started_at:.2f}s "
-        f"rows={row_count} "
-        f"trips_count={len(trips)}",
+        f"[treatment][job_id={job_id or '-'}][mode=xml_stream] process_treatment_step1 "
+        f"total={total_seconds:.2f}s "
+        f"parse_container={parse_completed_at - started_at:.2f}s "
+        f"resolve_sheet={sheet_resolved_at - parse_completed_at:.2f}s "
+        f"shared_strings_prepare={shared_stats['prepare_seconds']:.2f}s "
+        f"shared_strings_lookup={shared_stats['lookup_seconds']:.2f}s "
+        f"shared_strings_mode={shared_stats['mode']} "
+        f"shared_strings_count={shared_stats['count']} "
+        f"shared_strings_lookups={shared_stats['lookup_count']} "
+        f"trips={trips_completed_at - sheet_resolved_at:.2f}s "
+        f"prepare={prepare_completed_at - trips_completed_at:.2f}s "
+        f"process={process_completed_at - prepare_completed_at:.2f}s "
+        f"save={save_completed_at - process_completed_at:.2f}s "
+        f"register={finished_at - save_completed_at:.2f}s "
+        f"rows={row_count} rps={rows_per_second:.2f} rpm={rows_per_minute:.2f} trips_count={len(trips)}",
         flush=True,
     )
 
@@ -1505,13 +1690,25 @@ def process_treatment_step1_file_bytes(file_bytes: bytes, filename: str, config:
 
 
 def run_treatment_job(job_id: str, temp_input_path: Path, filename: str):
-    def progress_cb(phase, message, current=None, total=None):
-        update_treatment_progress(job_id, phase, message, current=current, total=total, status="processing")
+    def progress_cb(phase, message, current=None, total=None, total_is_estimate=None):
+        update_treatment_progress(
+            job_id,
+            phase,
+            message,
+            current=current,
+            total=total,
+            status="processing",
+            total_is_estimate=total_is_estimate,
+        )
 
     try:
-        update_treatment_progress(job_id, "opening_workbook", "Abrindo planilha...", status="processing")
-        file_bytes = temp_input_path.read_bytes()
-        result = process_treatment_file_bytes(file_bytes, filename, job_id=job_id, progress_cb=progress_cb)
+        update_treatment_progress(job_id, "parsing_container", "Lendo a estrutura do arquivo XLSX...", status="processing")
+        result = process_treatment_file_treatment(
+            filename,
+            job_id=job_id,
+            progress_cb=progress_cb,
+            input_path=temp_input_path,
+        )
         result["job_id"] = job_id
         update_treatment_status(
             job_id,
@@ -1546,16 +1743,23 @@ def run_treatment_job(job_id: str, temp_input_path: Path, filename: str):
 
 
 def run_treatment_step1_job(job_id: str, temp_input_path: Path, filename: str, config: dict):
-    def progress_cb(phase, message, current=None, total=None):
-        update_treatment_progress(job_id, phase, message, current=current, total=total, status="processing")
+    def progress_cb(phase, message, current=None, total=None, total_is_estimate=None):
+        update_treatment_progress(
+            job_id,
+            phase,
+            message,
+            current=current,
+            total=total,
+            status="processing",
+            total_is_estimate=total_is_estimate,
+        )
 
     try:
-        update_treatment_progress(job_id, "opening_workbook", "Abrindo planilha...", status="processing")
-        file_bytes = temp_input_path.read_bytes()
-        result = process_treatment_step1_file_bytes(
-            file_bytes,
+        update_treatment_progress(job_id, "parsing_container", "Lendo a estrutura do arquivo XLSX...", status="processing")
+        result = process_treatment_step1_treatment(
             filename,
             config,
+            input_path=temp_input_path,
             job_id=job_id,
             progress_cb=progress_cb,
         )
@@ -2278,6 +2482,8 @@ def poll_loop():
 # HTTP Server
 # -----------------------------
 class Handler(BaseHTTPRequestHandler):
+    FILE_STREAM_CHUNK_SIZE = 64 * 1024
+
     def _set_common_headers(self, content_type: str, content_length: int | None = None):
         self.send_header("Content-Type", content_type)
         if content_length is not None:
@@ -2322,12 +2528,27 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return default
 
+    def _send_file_stream(self, file_path: Path, content_type: str, code=200, download_name: str | None = None):
+        file_size = file_path.stat().st_size
+        self.send_response(code)
+        self._set_common_headers(content_type, file_size)
+        if download_name:
+            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+        self.end_headers()
+
+        with file_path.open("rb") as fh:
+            while True:
+                chunk = fh.read(self.FILE_STREAM_CHUNK_SIZE)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
     def _serve_file(self, file_path: Path, content_type: str | None = None, not_found_msg: str = "arquivo nao encontrado"):
         try:
             if not file_path.exists() or not file_path.is_file():
                 self._send_text(not_found_msg, "text/plain; charset=utf-8", 404)
                 return
-            self._send_bytes(file_path.read_bytes(), content_type or guess_content_type(file_path), 200)
+            self._send_file_stream(file_path, content_type or guess_content_type(file_path), 200)
         except Exception as e:
             self._send_text(f"Erro ao servir arquivo: {e}", "text/plain; charset=utf-8", 500)
 
@@ -2437,7 +2658,7 @@ class Handler(BaseHTTPRequestHandler):
                 if isinstance(resp, dict) and "error" in resp:
                     code = resp.get("error")
                     if code == 1:
-                        self._send_json({"error": "SID inválido/expirado. Atualize o SID."}, 401)
+                        self._send_json({"error": "SID invÃ¡lido/expirado. Atualize o SID."}, 401)
                         return
                     self._send_json({"error": f"Wialon error code: {code}"}, 400)
                     return
@@ -2499,18 +2720,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "file_not_found"}, 404)
                 return
 
-            content = file_path.read_bytes()
-            self.send_response(200)
-            self._set_common_headers(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                len(content),
+            self._send_file_stream(
+                file_path,
+                job.get("content_type") or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                200,
+                job["download_name"],
             )
-            self.send_header(
-                "Content-Disposition",
-                f'attachment; filename="{job["download_name"]}"'
-            )
-            self.end_headers()
-            self.wfile.write(content)
             return
 
         if path in ("/", "/dashboard.html"):

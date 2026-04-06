@@ -14,6 +14,7 @@
     analysisApplied: false,
     isProcessing: false,
     processingStartedAt: null,
+    progressRowCount: 0,
     activePollToken: 0
   };
 
@@ -183,6 +184,7 @@
     state.analysisApplied = false;
     state.isProcessing = false;
     state.processingStartedAt = null;
+    state.progressRowCount = 0;
     state.activePollToken += 1;
 
     els.fileName.textContent = "-";
@@ -281,11 +283,15 @@
     const message = progress?.message || fallbackMessage;
     const current = progress?.current;
     const total = progress?.total;
+    const totalIsEstimate = Boolean(progress?.total_is_estimate);
     const parts = [message];
 
     if (typeof current === "number" && typeof total === "number" && total > 0) {
       const percent = Math.max(0, Math.min(100, Math.round((current / total) * 100)));
       parts.push(`${percent}%`);
+      if (totalIsEstimate) {
+        parts.push("(estimado)");
+      }
     } else if (typeof current === "number") {
       parts.push(`(${current.toLocaleString("pt-BR")} linhas)`);
     }
@@ -304,13 +310,30 @@
     const progress = statusPayload?.progress || {};
     const phase = progress.phase || "";
     const message = describeProgress(progress, "Processando arquivo...");
+    const current = progress?.current;
 
     if (phase === "upload_received") {
       updateStatus("Arquivo enviado", "warn");
+    } else if (phase === "parsing_container") {
+      updateStatus("Lendo estrutura", "warn");
+    } else if (phase === "reading_shared_strings") {
+      updateStatus("Lendo textos", "warn");
+    } else if (phase === "reading_trips") {
+      updateStatus("Lendo viagens", "warn");
     } else if (phase === "writing_output" || phase === "finalizing") {
       updateStatus("Finalizando arquivo", "warn");
+    } else if (phase === "done") {
+      updateStatus("Pronto para download", "ok");
     } else {
-      updateStatus("Processando", "warn");
+      updateStatus("Tratando linhas", "warn");
+    }
+
+    if (typeof current === "number") {
+      state.progressRowCount = Math.max(state.progressRowCount || 0, current);
+      els.rowCount.textContent = String(state.progressRowCount);
+    }
+    if (state.isProcessing) {
+      els.columnCount.textContent = "-";
     }
 
     els.meta.textContent = message;
@@ -331,6 +354,7 @@
     state.analysisApplied = Boolean(options.analysisApplied);
     state.isProcessing = false;
     state.processingStartedAt = null;
+    state.progressRowCount = 0;
 
     els.fileName.textContent = state.originalFileName;
     els.rowCount.textContent = String(state.totalRows);
@@ -391,10 +415,13 @@
     state.analysisApplied = Boolean(options.analysisAppliedBeforeStart);
     state.isProcessing = true;
     state.processingStartedAt = Date.now();
+    state.progressRowCount = 0;
     setButtonState();
 
     updateStatus("Arquivo enviado", "warn");
     els.fileName.textContent = file.name;
+    els.rowCount.textContent = "0";
+    els.columnCount.textContent = "-";
     els.meta.textContent = "Upload concluído. Preparando processamento...";
 
     const extraHeaders = options.extraHeaders || {};
