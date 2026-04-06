@@ -38,6 +38,7 @@ function getInstanceDom(state) {
     commentTimeLabel: state.dom?.commentTimeLabel || fallbacks.commentTimeLabel || null,
     status: state.dom?.status || null,
     current: state.dom?.current || null,
+    zoomLabel: state.dom?.zoomLabel || null,
   };
 }
 
@@ -83,41 +84,87 @@ function getStateBlockBandLayout(hit) {
   };
 }
 
-function buildSeriesArrays(instanceLike = null) {
+function buildRenderableData(instanceLike = null) {
   const state = getResolvedState(instanceLike);
-  if (!state) return {};
+  if (!state) return { seriesData: {}, gapFlags: [] };
+
+  const lastSample = state.samples[state.samples.length - 1] || null;
+  const cacheKey = [
+    state.mode,
+    state.samples.length,
+    lastSample?.msgTm ?? "",
+    lastSample?.t ?? "",
+    lastSample?.isGap ? 1 : 0,
+  ].join("|");
+
+  if (state.renderDataCacheKey === cacheKey && state.renderDataCache) {
+    return state.renderDataCache;
+  }
 
   const allSeries = getAllSeries(state.mode);
   const seriesData = {};
-  for (const s of allSeries) seriesData[s.key] = [];
+  for (const s of allSeries) seriesData[s.key] = new Array(state.samples.length);
 
-  for (const smp of state.samples) {
+  const gapFlags = new Array(state.samples.length);
+
+  for (let i = 0; i < state.samples.length; i++) {
+    const smp = state.samples[i];
+    gapFlags[i] = !!smp?.isGap;
+
     for (const s of allSeries) {
-      seriesData[s.key].push(smp.values?.[s.key] ?? null);
+      seriesData[s.key][i] = smp?.values?.[s.key] ?? null;
     }
   }
 
-  return seriesData;
+  const renderableData = { seriesData, gapFlags };
+  state.renderDataCacheKey = cacheKey;
+  state.renderDataCache = renderableData;
+  return renderableData;
 }
 
-function buildGapFlags(instanceLike = null) {
+function getChartXZoom(state) {
+  return clamp(Number(state?.xZoom) || DEFAULT_X_ZOOM, MIN_X_ZOOM, MAX_X_ZOOM);
+}
+
+function formatChartZoom(state) {
+  return `${Math.round(getChartXZoom(state) * 100)}%`;
+}
+
+function getCanvasWidthCapForState(state) {
+  if (state?.mode !== "replay") return MAX_CANVAS_CSS_WIDTH;
+
+  const zoomFactor = getChartXZoom(state);
+  const replayCap = Math.round(MAX_CANVAS_CSS_WIDTH * zoomFactor);
+  return clamp(replayCap, MAX_CANVAS_CSS_WIDTH, MAX_REPLAY_CANVAS_CSS_WIDTH);
+}
+
+function updateChartZoomUi(instanceLike = null) {
   const state = getResolvedState(instanceLike);
-  if (!state) return [];
-  return state.samples.map((smp) => !!smp.isGap);
+  const dom = getInstanceDom(state);
+  if (dom.zoomLabel) {
+    dom.zoomLabel.textContent = formatChartZoom(state);
+  }
 }
 
-function getEffectivePxPerPoint(totalPoints) {
-  if (totalPoints <= 0) return BASE_PX_PER_POINT;
+function getEffectivePxPerPoint(totalPoints, zoomFactor = DEFAULT_X_ZOOM, widthCap = MAX_CANVAS_CSS_WIDTH) {
+  if (totalPoints <= 0) return BASE_PX_PER_POINT * zoomFactor;
 
-  const naturalWidth = totalPoints * BASE_PX_PER_POINT;
-  if (naturalWidth <= MAX_CANVAS_CSS_WIDTH) return BASE_PX_PER_POINT;
+  const naturalWidth = totalPoints * BASE_PX_PER_POINT * zoomFactor;
+  if (naturalWidth <= widthCap) return BASE_PX_PER_POINT * zoomFactor;
 
-  const compressed = MAX_CANVAS_CSS_WIDTH / totalPoints;
+  const compressed = widthCap / totalPoints;
   return Math.max(MIN_PX_PER_POINT, compressed);
 }
 
-function getSafeDevicePixelRatio() {
+function getSafeDevicePixelRatio(state = null, cssWidth = 0) {
   const dpr = window.devicePixelRatio || 1;
+  if (state?.mode === "replay") {
+    if (cssWidth >= LARGE_REPLAY_CANVAS_CSS_WIDTH) {
+      return Math.min(MIN_REPLAY_DEVICE_PIXEL_RATIO, MAX_REPLAY_DEVICE_PIXEL_RATIO);
+    }
+    return Math.min(dpr, MAX_REPLAY_DEVICE_PIXEL_RATIO);
+  }
+
   return Math.min(dpr, MAX_DEVICE_PIXEL_RATIO);
 }
 
@@ -129,14 +176,17 @@ function setupCanvasForInstance(instanceLike = null) {
 
   if (!canvas) return null;
 
-  const dpr = getSafeDevicePixelRatio();
   const visibleWidth = wrap ? Math.max(1, Math.floor(wrap.clientWidth)) : 1200;
   const totalPoints = Math.max(state.samples.length, MIN_VISIBLE_POINTS);
+  const zoomFactor = getChartXZoom(state);
+  const widthCap = getCanvasWidthCapForState(state);
 
-  const pxPerPoint = getEffectivePxPerPoint(totalPoints);
-  const desiredCssWidth = Math.max(visibleWidth, Math.ceil(totalPoints * pxPerPoint));
-  const cssW = Math.min(desiredCssWidth, MAX_CANVAS_CSS_WIDTH);
+  const preferredPxPerPoint = getEffectivePxPerPoint(totalPoints, zoomFactor, widthCap);
+  const desiredCssWidth = Math.max(visibleWidth, Math.ceil(totalPoints * preferredPxPerPoint));
+  const cssW = Math.min(desiredCssWidth, widthCap);
   const cssH = state.mode === "live" ? 560 : 560;
+  const pxPerPoint = totalPoints > 0 ? cssW / totalPoints : preferredPxPerPoint;
+  const dpr = getSafeDevicePixelRatio(state, cssW);
 
   if (canvas.style.width !== `${cssW}px`) canvas.style.width = cssW + "px";
   if (canvas.style.height !== `${cssH}px`) canvas.style.height = cssH + "px";
@@ -160,8 +210,88 @@ function setupCanvasForInstance(instanceLike = null) {
     H: cssH,
     dpr,
     pxPerPoint,
+    zoomFactor,
     totalPoints,
   };
+}
+
+function setChartXZoomInstance(instanceLike, nextZoom, options = {}) {
+  const instance = getResolvedInstance(instanceLike);
+  const state = getResolvedState(instance);
+  const dom = getInstanceDom(state);
+  const wrap = dom.wrap;
+
+  if (!instance || !state || !wrap || state.mode !== "replay") return;
+
+  if (state.pendingZoomFrame) {
+    cancelAnimationFrame(state.pendingZoomFrame);
+    state.pendingZoomFrame = 0;
+    state.pendingZoomTarget = null;
+    state.pendingZoomAnchorClientX = null;
+  }
+
+  const targetZoom = clamp(Number(nextZoom) || DEFAULT_X_ZOOM, MIN_X_ZOOM, MAX_X_ZOOM);
+  const currentZoom = getChartXZoom(state);
+  if (Math.abs(targetZoom - currentZoom) < 0.001) {
+    updateChartZoomUi(instance);
+    return;
+  }
+
+  const keepEnd = state.autoScrollToEnd;
+  const wrapRect = wrap.getBoundingClientRect();
+  const anchorClientX =
+    typeof options.anchorClientX === "number"
+      ? options.anchorClientX
+      : wrapRect.left + wrap.clientWidth / 2;
+  const anchorOffset = clamp(anchorClientX - wrapRect.left, 0, wrap.clientWidth);
+  const oldScrollWidth = Math.max(1, wrap.scrollWidth);
+  const oldAnchorRatio = (wrap.scrollLeft + anchorOffset) / oldScrollWidth;
+
+  state.xZoom = targetZoom;
+  updateChartZoomUi(instance);
+  drawChartInstance(instance);
+
+  requestAnimationFrame(() => {
+    const maxScrollLeft = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+    let nextScrollLeft = maxScrollLeft;
+
+    if (!keepEnd) {
+      nextScrollLeft = oldAnchorRatio * wrap.scrollWidth - anchorOffset;
+    }
+
+    wrap.scrollLeft = clamp(nextScrollLeft, 0, maxScrollLeft);
+    state.autoScrollToEnd =
+      wrap.scrollLeft + wrap.clientWidth >= wrap.scrollWidth - 40;
+  });
+}
+
+function zoomChartXInstance(instanceLike, direction, options = {}) {
+  const instance = getResolvedInstance(instanceLike);
+  const state = getResolvedState(instance);
+  if (!instance || !state || state.mode !== "replay") return;
+
+  const factor = direction > 0 ? X_ZOOM_STEP : 1 / X_ZOOM_STEP;
+  const baseZoom =
+    state.pendingZoomTarget !== null && state.pendingZoomTarget !== undefined
+      ? state.pendingZoomTarget
+      : getChartXZoom(state);
+
+  state.pendingZoomTarget = clamp(baseZoom * factor, MIN_X_ZOOM, MAX_X_ZOOM);
+  state.pendingZoomAnchorClientX =
+    typeof options.anchorClientX === "number" ? options.anchorClientX : null;
+
+  if (state.pendingZoomFrame) return;
+
+  state.pendingZoomFrame = requestAnimationFrame(() => {
+    const targetZoom = state.pendingZoomTarget;
+    const anchorClientX = state.pendingZoomAnchorClientX;
+
+    state.pendingZoomFrame = 0;
+    state.pendingZoomTarget = null;
+    state.pendingZoomAnchorClientX = null;
+
+    setChartXZoomInstance(instance, targetZoom, { anchorClientX });
+  });
 }
 
 function getYRangeFor(key, dataArr) {
@@ -415,11 +545,11 @@ function drawChartInstance(instanceLike = null) {
 
     const { ctx, W, H, pxPerPoint } = setup;
     restoreScroll();
+    updateChartZoomUi(instance);
 
     ctx.clearRect(0, 0, W, H);
 
-    const seriesData = buildSeriesArrays(instance);
-    const gapFlags = buildGapFlags(instance);
+    const { seriesData, gapFlags } = buildRenderableData(instance);
     const visibleSeries = getVisibleSeries(state.mode);
 
     const totalSlots = Math.max(state.samples.length, MIN_VISIBLE_POINTS);
@@ -716,8 +846,12 @@ function drawChartInstance(instanceLike = null) {
     }
 
     if (dom.meta) {
+      const zoomText =
+        state.mode === "replay"
+          ? ` • zoom X: ${formatChartZoom(state)} • Ctrl + roda para zoom`
+          : "";
       dom.meta.innerText =
-        `Leituras: ${state.samples.length} • base visual mínima: ${MIN_VISIBLE_POINTS} pontos • densidade adaptativa ativa • comentários: ${Object.keys(state.commentsByMsgTm).length}`;
+        `Leituras: ${state.samples.length} • base visual mínima: ${MIN_VISIBLE_POINTS} pontos • densidade adaptativa ativa${zoomText} • comentários: ${Object.keys(state.commentsByMsgTm).length}`;
     }
 
     if (dom.status) dom.status.textContent = state.mode === "replay" ? "Pronto" : "Online";
@@ -938,6 +1072,16 @@ function attachChartEvents(instanceLike) {
 
   dom.wrap.addEventListener("mousemove", (ev) => onMoveInstance(instance, ev));
   dom.wrap.addEventListener("mouseleave", () => onLeaveInstance(instance));
+  dom.wrap.addEventListener("wheel", (ev) => {
+    if (state.mode !== "replay") return;
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+
+    ev.preventDefault();
+    setActiveChartInstance(instance.id);
+    zoomChartXInstance(instance, ev.deltaY < 0 ? 1 : -1, {
+      anchorClientX: ev.clientX,
+    });
+  }, { passive: false });
   dom.canvas.addEventListener("click", (ev) => onChartClickInstance(instance, ev));
 
   dom.wrap.dataset.chartBound = "1";
@@ -960,6 +1104,12 @@ function destroyChartInstance(instanceLike) {
   if (!instance || !state) return;
 
   clearInstanceReplayTimer(state);
+  if (state.pendingZoomFrame) {
+    cancelAnimationFrame(state.pendingZoomFrame);
+    state.pendingZoomFrame = 0;
+    state.pendingZoomTarget = null;
+    state.pendingZoomAnchorClientX = null;
+  }
   detachChartEvents(instance);
   unregisterChartInstance(instance.id);
 }

@@ -426,6 +426,13 @@
           <div class="replay-compare-subtitle">Comparativo independente com comentários, tooltip e replay próprio.</div>
         </div>
         <div class="replay-compare-actions">
+          <div class="replay-zoom-group" aria-label="Zoom horizontal do replay">
+            <button type="button" data-action="zoom-out" title="Diminuir zoom horizontal">-</button>
+            <button type="button" data-action="zoom-reset" class="replay-zoom-pill" title="Resetar zoom horizontal">
+              <span data-role="zoom">100%</span>
+            </button>
+            <button type="button" data-action="zoom-in" title="Aumentar zoom horizontal">+</button>
+          </div>
           <button type="button" data-action="play">Play</button>
           <button type="button" data-action="pause">Pause</button>
           <button type="button" data-action="show-all">Mostrar tudo</button>
@@ -496,6 +503,9 @@
 
       setActiveChartInstance(instance.id);
 
+      if (action === "zoom-out") zoomChartXInstance(instance, -1);
+      if (action === "zoom-reset") setChartXZoomInstance(instance, DEFAULT_X_ZOOM);
+      if (action === "zoom-in") zoomChartXInstance(instance, 1);
       if (action === "play") startReplayForInstance(instance);
       if (action === "pause") pauseReplayForInstance(instance);
       if (action === "show-all") showAllReplayForInstance(instance);
@@ -544,6 +554,7 @@
     const commentTimeLabel = popover?.querySelector(".comment-popover-time");
     const status = cardEl.querySelector("[data-role='status']");
     const current = cardEl.querySelector("[data-role='current']");
+    const zoomLabel = cardEl.querySelector("[data-role='zoom']");
 
     bindDomToState(state, {
       wrap,
@@ -555,6 +566,7 @@
       commentTimeLabel,
       status,
       current,
+      zoomLabel,
     });
 
     const instance = {
@@ -572,6 +584,7 @@
 
     registerChartInstance(instance);
     attachChartEvents(instance);
+    updateChartZoomUi(instance);
 
     return instance;
   }

@@ -315,9 +315,10 @@
       const host = window.location.hostname || "";
       const isLocal = host === "localhost" || host === "127.0.0.1";
       const isRender = host.endsWith(".onrender.com");
+      const hostedBackend = "https://dashboardtracker-pb4e.onrender.com";
 
       window.__FRONTEND_BASE__ = window.location.origin;
-      window.__BACKEND_BASE__ = (isLocal || isRender) ? window.location.origin : "/api";
+      window.__BACKEND_BASE__ = (isLocal || isRender) ? window.location.origin : hostedBackend;
     })();
   </script>
   <script src="./js/config.js"></script>
