@@ -46,6 +46,8 @@ function createChartState(overrides = {}) {
 
     autoScrollToEnd:
       overrides.autoScrollToEnd !== undefined ? !!overrides.autoScrollToEnd : true,
+    xZoom:
+      overrides.xZoom !== undefined ? Number(overrides.xZoom) || DEFAULT_X_ZOOM : DEFAULT_X_ZOOM,
 
     HIT: overrides.HIT || null,
     HOVER: overrides.HOVER || {
@@ -64,6 +66,16 @@ function createChartState(overrides = {}) {
     lastScrollEventAt:
       overrides.lastScrollEventAt !== undefined ? overrides.lastScrollEventAt : 0,
     pointerDownInfo: overrides.pointerDownInfo || null,
+    renderDataCacheKey: overrides.renderDataCacheKey || "",
+    renderDataCache: overrides.renderDataCache || null,
+    pendingZoomFrame:
+      overrides.pendingZoomFrame !== undefined ? overrides.pendingZoomFrame : 0,
+    pendingZoomTarget:
+      overrides.pendingZoomTarget !== undefined ? overrides.pendingZoomTarget : null,
+    pendingZoomAnchorClientX:
+      overrides.pendingZoomAnchorClientX !== undefined
+        ? overrides.pendingZoomAnchorClientX
+        : null,
 
     dom: {
       wrap: overrides.dom?.wrap || null,
@@ -75,6 +87,7 @@ function createChartState(overrides = {}) {
       commentTimeLabel: overrides.dom?.commentTimeLabel || null,
       status: overrides.dom?.status || null,
       current: overrides.dom?.current || null,
+      zoomLabel: overrides.dom?.zoomLabel || null,
     },
   };
 }
@@ -166,6 +179,7 @@ function bindDomToState(state, domRefs = {}) {
   state.dom.commentTimeLabel = domRefs.commentTimeLabel || null;
   state.dom.status = domRefs.status || null;
   state.dom.current = domRefs.current || null;
+  state.dom.zoomLabel = domRefs.zoomLabel || null;
 }
 
 function clearInstanceReplayTimer(state) {
@@ -192,6 +206,8 @@ function resetChartStateForInstance(state) {
   state.lastConsumidoRaw = null;
   state.lastMsgTm = null;
   state.HIT = null;
+  state.renderDataCacheKey = "";
+  state.renderDataCache = null;
   resetInstanceHover(state);
   resetInstanceSelection(state);
 }
@@ -201,6 +217,8 @@ function resetReplayStateForInstance(state) {
 
   state.replayRows = [];
   state.replayIndex = 0;
+  state.renderDataCacheKey = "";
+  state.renderDataCache = null;
   clearInstanceReplayTimer(state);
 }
 
@@ -214,6 +232,14 @@ function resetInteractiveStateForInstance(state) {
   state.isDrawing = false;
   state.lastScrollEventAt = 0;
   state.pointerDownInfo = null;
+  state.renderDataCacheKey = "";
+  state.renderDataCache = null;
+  state.pendingZoomTarget = null;
+  state.pendingZoomAnchorClientX = null;
+  if (state.pendingZoomFrame) {
+    cancelAnimationFrame(state.pendingZoomFrame);
+    state.pendingZoomFrame = 0;
+  }
 }
 
 function resetFullInstanceState(state) {
