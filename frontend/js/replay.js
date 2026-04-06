@@ -227,6 +227,8 @@
 
   function normalizeReplayRowFromArray(row, cols) {
     const id = getCell(row, cols.id);
+    const coordinatesRaw = String(getCell(row, cols.coordinates) ?? "").trim();
+    const coordinates = parseCoordinatesValue(coordinatesRaw);
 
     let tmText = getCell(row, cols.tm);
 
@@ -262,6 +264,8 @@
       arlaRaw: toNum(getCell(row, cols.arla_raw)),
       consumido_delta: 0,
       consumidoDeltaRaw: toNum(getCell(row, cols.consumido_delta_raw)),
+      coordinates,
+      coordinatesText: coordinates ? formatCoordinatesLabel(coordinates) : coordinatesRaw,
       comment: String(getCell(row, cols.comment) ?? "").trim(),
     };
   }
@@ -404,6 +408,8 @@
         consumido_delta: row.consumido_delta,
         peso_total: row.peso_total,
       },
+      coordinates: row.coordinates || null,
+      coordinatesText: row.coordinatesText || "",
       isGap: false,
     });
 
@@ -480,6 +486,8 @@
         <div class="comment-popover hidden replay-comment-popover" role="dialog" aria-label="Comentário do ponto">
           <div class="comment-popover-title">Comentário do ponto</div>
           <div class="comment-popover-time">-</div>
+          <div class="comment-popover-location" data-role="comment-coordinates" hidden></div>
+          <a class="comment-popover-link" data-role="comment-maps-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Abrir no Google Maps</a>
           <textarea placeholder="Digite um comentário para este instante..."></textarea>
           <div class="comment-actions">
             <button type="button" data-action="save-comment">Salvar</button>
@@ -775,6 +783,7 @@
         Arla: s.values?.arla ?? "",
         "Consumido Delta": s.values?.consumido_delta ?? "",
         "Peso Total": s.values?.peso_total ?? "",
+        Coordenadas: s.coordinatesText || formatCoordinatesLabel(s.coordinates),
         Comentarios: state.commentsByMsgTm[s.msgTm] ?? "",
       }));
 

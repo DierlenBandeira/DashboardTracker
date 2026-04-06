@@ -118,10 +118,31 @@ function openCommentPopoverInstance(instanceLike, idx, px, py) {
   dom.commentTimeLabel.textContent = `Instante: ${formatTimestampFull(sample.msgTm)}`;
   dom.commentInput.value = state.commentsByMsgTm[state.selectedMsgTm] || "";
 
+  const coordinatesEl = dom.popover.querySelector("[data-role='comment-coordinates']");
+  const mapsLinkEl = dom.popover.querySelector("[data-role='comment-maps-link']");
+  const coordinatesLabel =
+    sample.coordinatesText || formatCoordinatesLabel(sample.coordinates);
+  const mapsUrl = buildGoogleMapsUrl(sample.coordinates || sample.coordinatesText);
+
+  if (coordinatesEl) {
+    coordinatesEl.textContent = coordinatesLabel ? `Coordenadas: ${coordinatesLabel}` : "";
+    coordinatesEl.hidden = !coordinatesLabel;
+  }
+
+  if (mapsLinkEl) {
+    if (mapsUrl) {
+      mapsLinkEl.href = mapsUrl;
+      mapsLinkEl.hidden = false;
+    } else {
+      mapsLinkEl.removeAttribute("href");
+      mapsLinkEl.hidden = true;
+    }
+  }
+
   dom.popover.classList.remove("hidden");
 
-  const pw = 320;
-  const ph = 210;
+  const pw = Math.max(320, dom.popover.offsetWidth || 320);
+  const ph = Math.max(210, dom.popover.offsetHeight || 210);
 
   const scrollLeft = dom.wrap.scrollLeft;
   const visibleLeft = scrollLeft;
@@ -152,6 +173,18 @@ function closeCommentPopoverInstance(instanceLike, force = false) {
 
   state.selectedIdx = null;
   state.selectedMsgTm = null;
+
+  const coordinatesEl = dom.popover.querySelector("[data-role='comment-coordinates']");
+  const mapsLinkEl = dom.popover.querySelector("[data-role='comment-maps-link']");
+  if (coordinatesEl) {
+    coordinatesEl.textContent = "";
+    coordinatesEl.hidden = true;
+  }
+  if (mapsLinkEl) {
+    mapsLinkEl.removeAttribute("href");
+    mapsLinkEl.hidden = true;
+  }
+
   dom.popover.classList.add("hidden");
 
   if (!force) {

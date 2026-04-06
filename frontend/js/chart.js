@@ -473,6 +473,7 @@ function showTipForInstance(instanceLike, x, y, html) {
 
   tip.innerHTML = html;
   tip.style.display = "block";
+  tip.style.pointerEvents = "none";
 
   const tw = tip.offsetWidth;
   const th = tip.offsetHeight;

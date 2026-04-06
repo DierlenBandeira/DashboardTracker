@@ -329,6 +329,7 @@ const IMPORT_HEADER_ALIASES = {
   consumido_raw: ["Consumido*"],
   arla_raw: ["Arla*"],
   consumido_delta_raw: ["Consumido Delta*"],
+  coordinates: ["Coordenadas*", "Coordenadas", "Coordenada*", "Coordenada", "Latitude/Longitude", "Lat/Lng"],
   comment: [],
   odometro: ["Odômetro*"],
 };

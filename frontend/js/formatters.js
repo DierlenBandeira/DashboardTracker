@@ -143,3 +143,46 @@ function escapeHtml(text) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+
+function parseCoordinatesValue(value) {
+  if (value == null) return null;
+
+  if (
+    typeof value === "object" &&
+    Number.isFinite(value.lat) &&
+    Number.isFinite(value.lng)
+  ) {
+    const lat = Number(value.lat);
+    const lng = Number(value.lng);
+    if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+      return { lat, lng };
+    }
+    return null;
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+
+  const matches = text.match(/[-+]?\d+(?:[.,]\d+)?/g);
+  if (!matches || matches.length < 2) return null;
+
+  const lat = Number(matches[0].replace(",", "."));
+  const lng = Number(matches[1].replace(",", "."));
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+
+  return { lat, lng };
+}
+
+function formatCoordinatesLabel(value) {
+  const parsed = parseCoordinatesValue(value);
+  if (!parsed) return "";
+  return `${parsed.lat.toFixed(6)}, ${parsed.lng.toFixed(6)}`;
+}
+
+function buildGoogleMapsUrl(value) {
+  const label = formatCoordinatesLabel(value);
+  if (!label) return "";
+  return `https://www.google.com/maps?q=${encodeURIComponent(label)}`;
+}

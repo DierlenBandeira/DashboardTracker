@@ -673,6 +673,26 @@ button:active {
   backdrop-filter: blur(8px);
 }
 
+.replay-card-tip {
+  position: absolute;
+  pointer-events: auto;
+  display: none;
+  background: rgba(15, 23, 42, 0.94);
+  color: #fff;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 320px;
+  box-shadow:
+    0 18px 34px rgba(2, 6, 23, 0.28),
+    0 6px 14px rgba(2, 6, 23, 0.18);
+  z-index: 10;
+  white-space: normal;
+  border: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(8px);
+}
+
 .comment-popover {
   position: absolute;
   width: 320px;
@@ -702,6 +722,28 @@ button:active {
   font-size: 12px;
   color: #6b7280;
   margin-bottom: 8px;
+}
+
+.comment-popover-location {
+  font-size: 12px;
+  color: #475569;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+
+.comment-popover-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.comment-popover-link:hover {
+  text-decoration: underline;
 }
 
 .comment-popover textarea {
