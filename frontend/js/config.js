@@ -1,4 +1,5 @@
 const API_BASE = (
+  window.__BACKEND_BASE__ ||
   window.__API_BASE__ ||
   window.location.origin
 ).replace(/\/$/, "");

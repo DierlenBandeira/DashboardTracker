@@ -1,6 +1,12 @@
 (function () {
   const POLL_INTERVAL_MS = 1500;
   const POLL_TIMEOUT_MS = 30 * 60 * 1000;
+  const FRONTEND_BASE = (window.__FRONTEND_BASE__ || window.location.origin).replace(/\/$/, "");
+  const BACKEND_BASE = (
+    window.__BACKEND_BASE__ ||
+    window.__API_BASE__ ||
+    window.location.origin
+  ).replace(/\/$/, "");
 
   const state = {
     originalFileName: "",
@@ -18,10 +24,12 @@
     activePollToken: 0
   };
 
-  const API_BASE = (window.__API_BASE__ || window.location.origin).replace(/\/$/, "");
-
   function apiUrl(path) {
-    return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+    return `${BACKEND_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  }
+
+  function frontendUrl(path) {
+    return `${FRONTEND_BASE}${path.startsWith("/") ? path : `/${path}`}`;
   }
 
   function previewApiBody(rawText) {
@@ -232,7 +240,7 @@
     if (!els.configsRoot) return;
 
     try {
-      const response = await fetch(apiUrl("/components/treatment/configs"), {
+      const response = await fetch(frontendUrl("/components/treatment/configs"), {
         cache: "no-store"
       });
 

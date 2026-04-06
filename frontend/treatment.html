@@ -138,7 +138,14 @@
  
   <script src="/js/sidebar.js"></script>
   <script>
-    window.__API_BASE__ = window.location.origin;
+    (function () {
+      const host = window.location.hostname || "";
+      const isLocal = host === "localhost" || host === "127.0.0.1";
+      const isRender = host.endsWith(".onrender.com");
+
+      window.__FRONTEND_BASE__ = window.location.origin;
+      window.__BACKEND_BASE__ = (isLocal || isRender) ? window.location.origin : "/api";
+    })();
   </script>
   <script src="/js/treatment.js"></script>
 </body>
