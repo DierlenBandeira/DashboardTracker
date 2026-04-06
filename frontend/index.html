@@ -310,6 +310,16 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script>
+    (function () {
+      const host = window.location.hostname || "";
+      const isLocal = host === "localhost" || host === "127.0.0.1";
+      const isRender = host.endsWith(".onrender.com");
+
+      window.__FRONTEND_BASE__ = window.location.origin;
+      window.__BACKEND_BASE__ = (isLocal || isRender) ? window.location.origin : "/api";
+    })();
+  </script>
   <script src="./js/config.js"></script>
   <script src="./js/state.js"></script>
   <script src="./js/formatters.js"></script>
