@@ -170,6 +170,351 @@
     };
   }
 
+  function byId(id) {
+    return document.getElementById(id);
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function roundToStep(value, step) {
+    const precision = String(step).includes(".")
+      ? String(step).split(".")[1].length
+      : 0;
+    return Number((Math.round(value / step) * step).toFixed(precision));
+  }
+
+  function parseConfigNumber(id, fallback) {
+    const el = byId(id);
+    if (!el) return fallback;
+    const value = Number(String(el.value ?? "").replace(",", "."));
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function setInputValue(id, value, decimals = null) {
+    const el = byId(id);
+    if (!el) return;
+    el.value = decimals === null ? String(value) : Number(value).toFixed(decimals);
+  }
+
+  function setText(id, value) {
+    const el = byId(id);
+    if (el) el.textContent = String(value);
+  }
+
+  function formatNumber(value, decimals = 0) {
+    return Number(value).toLocaleString("pt-BR", {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals
+    });
+  }
+
+  function formatSmart(value, maxDecimals = 2) {
+    return Number(value).toLocaleString("pt-BR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: maxDecimals
+    });
+  }
+
+  function pct(value, max) {
+    return `${clamp((value / max) * 100, 0, 100)}%`;
+  }
+
+  function updateRangePart(id, leftValue, rightValue, max) {
+    const el = byId(id);
+    if (!el) return;
+    const left = clamp((leftValue / max) * 100, 0, 100);
+    const right = clamp((rightValue / max) * 100, 0, 100);
+    el.style.left = `${left}%`;
+    el.style.width = `${Math.max(0, right - left)}%`;
+  }
+
+  function positionHandle(id, value, max) {
+    const el = byId(id);
+    if (el) el.style.left = pct(value, max);
+  }
+
+  function valueFromPointer(event, track, max, step) {
+    const rect = track.getBoundingClientRect();
+    const ratio = rect.width ? (event.clientX - rect.left) / rect.width : 0;
+    return roundToStep(clamp(ratio, 0, 1) * max, step);
+  }
+
+  function bindDrag(trackId, handleId, onValue) {
+    const track = byId(trackId);
+    const handle = byId(handleId);
+    if (!track || !handle) return;
+
+    const move = (event) => {
+      event.preventDefault();
+      onValue(event, track);
+    };
+
+    const stop = () => {
+      handle.classList.remove("is-active");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+
+    handle.addEventListener("pointerdown", (event) => {
+      handle.classList.add("is-active");
+      handle.setPointerCapture?.(event.pointerId);
+      move(event);
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop, { once: true });
+      window.addEventListener("pointercancel", stop, { once: true });
+    });
+  }
+
+  function initSpeedConfig() {
+    const lowInput = byId("speedLowMax");
+    const mediumInput = byId("speedMediumMax");
+    if (!lowInput || !mediumInput || !byId("speedRangeSlider")) return;
+
+    const max = 30;
+    const step = 0.1;
+
+    const render = () => {
+      let low = clamp(parseConfigNumber("speedLowMax", 10), 0, max);
+      let medium = clamp(parseConfigNumber("speedMediumMax", 15), 0, max);
+      if (low > medium) low = medium;
+
+      setInputValue("speedLowMax", low);
+      setInputValue("speedMediumMax", medium);
+      setInputValue("speedHighMin", medium);
+
+      positionHandle("speedLowHandle", low, max);
+      positionHandle("speedMediumHandle", medium, max);
+      updateRangePart("speedSegLow", 0, low, max);
+      updateRangePart("speedSegMedium", low, medium, max);
+      updateRangePart("speedSegHigh", medium, max, max);
+
+      setText("speedLowPreview", formatSmart(low, 1));
+      setText("speedMediumFromPreview", formatSmart(low, 1));
+      setText("speedMediumToPreview", formatSmart(medium, 1));
+      setText("speedHighLegendPreview", formatSmart(medium, 1));
+      setText("speedHighPreview", formatSmart(medium, 1));
+    };
+
+    lowInput.addEventListener("input", render);
+    mediumInput.addEventListener("input", render);
+    bindDrag("speedRangeSlider", "speedLowHandle", (event, track) => {
+      const medium = parseConfigNumber("speedMediumMax", 15);
+      setInputValue("speedLowMax", Math.min(valueFromPointer(event, track, max, step), medium));
+      render();
+    });
+    bindDrag("speedRangeSlider", "speedMediumHandle", (event, track) => {
+      const low = parseConfigNumber("speedLowMax", 10);
+      setInputValue("speedMediumMax", Math.max(valueFromPointer(event, track, max, step), low));
+      render();
+    });
+    render();
+  }
+
+  function initRpmTransitConfig() {
+    const startInput = byId("rpmIntenseLow");
+    const middleInput = byId("rpmLightMin");
+    const endInput = byId("rpmLightMax");
+    if (!startInput || !middleInput || !endInput || !byId("rpmTransitSlider")) return;
+
+    const max = 3000;
+    const step = 1;
+
+    const render = () => {
+      let start = clamp(parseConfigNumber("rpmIntenseLow", 900), 0, max);
+      let middle = clamp(parseConfigNumber("rpmLightMin", 1100), 0, max);
+      let end = clamp(parseConfigNumber("rpmLightMax", 1900), 0, max);
+      middle = clamp(middle, start, end);
+      start = Math.min(start, middle);
+      end = Math.max(end, middle);
+
+      setInputValue("rpmIntenseLow", Math.round(start));
+      setInputValue("rpmLightMin", Math.round(middle));
+      setInputValue("rpmLightMax", Math.round(end));
+      setInputValue("rpmIntenseHigh", Math.round(end));
+      setInputValue("rpmMediumMin", Math.round(start));
+      setInputValue("rpmMediumMax", Math.max(Math.round(middle) - 1, Math.round(start)));
+
+      positionHandle("rpmTransitHandleStart", start, max);
+      positionHandle("rpmTransitHandleMiddle", middle, max);
+      positionHandle("rpmTransitHandleEnd", end, max);
+      updateRangePart("rpmTransitSegIntenseLow", 0, start, max);
+      updateRangePart("rpmTransitSegMedium", start, middle, max);
+      updateRangePart("rpmTransitSegLight", middle, end, max);
+      updateRangePart("rpmTransitSegIntenseHigh", end, max, max);
+
+      setText("rpmIntenseLowPreview", Math.round(start));
+      setText("rpmIntenseHighPreview", Math.round(end));
+      setText("rpmMediumMinPreview", Math.round(start));
+      setText("rpmMediumMaxPreview", Math.max(Math.round(middle) - 1, Math.round(start)));
+      setText("rpmLightMinPreview", Math.round(middle));
+      setText("rpmLightMaxPreview", Math.round(end));
+    };
+
+    [startInput, middleInput, endInput].forEach((input) => input.addEventListener("input", render));
+    bindDrag("rpmTransitSlider", "rpmTransitHandleStart", (event, track) => {
+      const middle = parseConfigNumber("rpmLightMin", 1100);
+      setInputValue("rpmIntenseLow", Math.min(valueFromPointer(event, track, max, step), middle));
+      render();
+    });
+    bindDrag("rpmTransitSlider", "rpmTransitHandleMiddle", (event, track) => {
+      const start = parseConfigNumber("rpmIntenseLow", 900);
+      const end = parseConfigNumber("rpmLightMax", 1900);
+      setInputValue("rpmLightMin", clamp(valueFromPointer(event, track, max, step), start, end));
+      render();
+    });
+    bindDrag("rpmTransitSlider", "rpmTransitHandleEnd", (event, track) => {
+      const middle = parseConfigNumber("rpmLightMin", 1100);
+      setInputValue("rpmLightMax", Math.max(valueFromPointer(event, track, max, step), middle));
+      render();
+    });
+    render();
+  }
+
+  function initBrakeConfig() {
+    const mediumInput = byId("brakeMediumMin");
+    const intenseInput = byId("brakeIntenseMin");
+    if (!mediumInput || !intenseInput || !byId("brakeRangeSlider")) return;
+
+    const max = 8;
+    const step = 0.01;
+
+    const render = () => {
+      let medium = clamp(parseConfigNumber("brakeMediumMin", 2), 0, max);
+      let intense = clamp(parseConfigNumber("brakeIntenseMin", 4), 0, max);
+      if (medium > intense) medium = intense;
+      const lightMax = Math.max(0, medium - step);
+      const mediumMax = Math.max(medium, intense - step);
+
+      setInputValue("brakeMediumMin", medium, 2);
+      setInputValue("brakeIntenseMin", intense, 2);
+      setInputValue("brakeLightMax", lightMax, 2);
+      setInputValue("brakeMediumMax", mediumMax, 2);
+
+      positionHandle("brakeMediumHandle", medium, max);
+      positionHandle("brakeIntenseHandle", intense, max);
+      updateRangePart("brakeSegLight", 0, medium, max);
+      updateRangePart("brakeSegMedium", medium, intense, max);
+      updateRangePart("brakeSegIntense", intense, max, max);
+
+      setText("brakeLightMaxPreview", formatNumber(lightMax, 2));
+      setText("brakeLightMaxValuePreview", formatNumber(lightMax, 2));
+      setText("brakeMediumMinPreview", formatSmart(medium, 2));
+      setText("brakeMediumMaxPreview", formatNumber(mediumMax, 2));
+      setText("brakeMediumMaxValuePreview", formatNumber(mediumMax, 2));
+      setText("brakeIntenseMinPreview", formatSmart(intense, 2));
+    };
+
+    mediumInput.addEventListener("input", render);
+    intenseInput.addEventListener("input", render);
+    bindDrag("brakeRangeSlider", "brakeMediumHandle", (event, track) => {
+      const intense = parseConfigNumber("brakeIntenseMin", 4);
+      setInputValue("brakeMediumMin", Math.min(valueFromPointer(event, track, max, step), intense), 2);
+      render();
+    });
+    bindDrag("brakeRangeSlider", "brakeIntenseHandle", (event, track) => {
+      const medium = parseConfigNumber("brakeMediumMin", 2);
+      setInputValue("brakeIntenseMin", Math.max(valueFromPointer(event, track, max, step), medium), 2);
+      render();
+    });
+    render();
+  }
+
+  function initAccelConfig() {
+    const minInput = byId("accelMediumMin");
+    const maxInput = byId("accelMediumMax");
+    if (!minInput || !maxInput || !byId("accelRangeSlider")) return;
+
+    const max = 100;
+    const step = 0.01;
+
+    const render = () => {
+      let min = clamp(parseConfigNumber("accelMediumMin", 30), 0, max - step);
+      let mediumMax = clamp(parseConfigNumber("accelMediumMax", 60), step, max - step);
+      if (min > mediumMax) min = mediumMax;
+      const intenseMin = Math.min(max, mediumMax + step);
+
+      setInputValue("accelMediumMin", min, 2);
+      setInputValue("accelMediumMax", mediumMax, 2);
+      setInputValue("accelLightMax", min, 2);
+      setInputValue("accelIntenseMin", intenseMin, 2);
+
+      positionHandle("accelMediumMinHandle", min, max);
+      positionHandle("accelMediumMaxHandle", mediumMax, max);
+      updateRangePart("accelSegLight", 0, min, max);
+      updateRangePart("accelSegMedium", min, mediumMax, max);
+      updateRangePart("accelSegIntense", mediumMax, max, max);
+
+      setText("accelLightMaxPreview", formatSmart(min, 2));
+      setText("accelLightMaxValuePreview", formatSmart(min, 2));
+      setText("accelMediumMinPreview", formatSmart(min, 2));
+      setText("accelMediumMaxPreview", formatSmart(mediumMax, 2));
+      setText("accelIntenseMinPreview", formatNumber(intenseMin, 2));
+      setText("accelIntenseMinValuePreview", formatNumber(intenseMin, 2));
+    };
+
+    minInput.addEventListener("input", render);
+    maxInput.addEventListener("input", render);
+    bindDrag("accelRangeSlider", "accelMediumMinHandle", (event, track) => {
+      const mediumMax = parseConfigNumber("accelMediumMax", 60);
+      setInputValue("accelMediumMin", Math.min(valueFromPointer(event, track, max, step), mediumMax), 2);
+      render();
+    });
+    bindDrag("accelRangeSlider", "accelMediumMaxHandle", (event, track) => {
+      const min = parseConfigNumber("accelMediumMin", 30);
+      setInputValue("accelMediumMax", Math.max(valueFromPointer(event, track, max, step), min), 2);
+      render();
+    });
+    render();
+  }
+
+  function initBestRpmConfig() {
+    const minRange = byId("bestRpmMinRange");
+    const maxRange = byId("bestRpmMaxRange");
+    const minInput = byId("bestRpmMin");
+    const maxInput = byId("bestRpmMax");
+    const fill = byId("bestRpmTrackFill");
+    if (!minRange || !maxRange || !minInput || !maxInput || !fill) return;
+
+    const max = 3000;
+
+    const render = () => {
+      let min = clamp(parseConfigNumber("bestRpmMin", 1100), 0, max);
+      let rpmMax = clamp(parseConfigNumber("bestRpmMax", 1900), 0, max);
+      if (min > rpmMax) min = rpmMax;
+
+      setInputValue("bestRpmMin", Math.round(min));
+      setInputValue("bestRpmMax", Math.round(rpmMax));
+      minRange.value = String(Math.round(min));
+      maxRange.value = String(Math.round(rpmMax));
+
+      fill.style.left = pct(min, max);
+      fill.style.width = pct(rpmMax - min, max);
+    };
+
+    minRange.addEventListener("input", () => {
+      setInputValue("bestRpmMin", Math.min(Number(minRange.value), parseConfigNumber("bestRpmMax", 1900)));
+      render();
+    });
+    maxRange.addEventListener("input", () => {
+      setInputValue("bestRpmMax", Math.max(Number(maxRange.value), parseConfigNumber("bestRpmMin", 1100)));
+      render();
+    });
+    minInput.addEventListener("input", render);
+    maxInput.addEventListener("input", render);
+    render();
+  }
+
+  function initTreatmentConfigControls() {
+    initSpeedConfig();
+    initRpmTransitConfig();
+    initBrakeConfig();
+    initAccelConfig();
+    initBestRpmConfig();
+  }
+
   function setButtonState() {
     els.btnSelect.disabled = state.isProcessing;
     els.btnAddAnalysis.disabled = state.isProcessing || !state.currentFile;
@@ -249,6 +594,7 @@
       }
 
       els.configsRoot.innerHTML = await response.text();
+      initTreatmentConfigControls();
     } catch (error) {
       console.error("Erro ao carregar configs do treatment:", error);
     }

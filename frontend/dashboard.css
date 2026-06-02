@@ -2788,6 +2788,7 @@ button:disabled {
   height: 24px;
   margin-top: 2px;
   isolation: isolate;
+  touch-action: none;
 }
 
 .rpm-transit-track,
@@ -2972,6 +2973,7 @@ button:disabled {
   height: 24px;
   margin-top: 2px;
   isolation: isolate;
+  touch-action: none;
 }
 
 .brake-range-track,
@@ -3164,6 +3166,7 @@ button:disabled {
   height: 24px;
   margin-top: 2px;
   isolation: isolate;
+  touch-action: none;
 }
 
 .accel-range-track,
