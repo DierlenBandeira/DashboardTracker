@@ -5,6 +5,7 @@ import os
 import re
 import time
 import threading
+import traceback
 import unicodedata
 import uuid
 from bisect import bisect_left
@@ -37,11 +38,14 @@ TEMP_TREATMENT_DIR = BASE_DIR / "_treatment_jobs"
 TEMP_TREATMENT_DIR.mkdir(parents=True, exist_ok=True)
 TEMP_TREATMENT_INBOX_DIR = TEMP_TREATMENT_DIR / "inbox"
 TEMP_TREATMENT_INBOX_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_TREATMENT_LOG_DIR = TEMP_TREATMENT_DIR / "logs"
+TEMP_TREATMENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 TREATMENT_JOBS_LOCK = threading.Lock()
 TREATMENT_JOBS = {}
 TREATMENT_STATUS_LOCK = threading.Lock()
 TREATMENT_STATUS = {}
+TREATMENT_LOG_LOCK = threading.Lock()
 PREVIEW_LIMIT = 200
 
 HTML_PATH = FRONTEND_DIR / "index.html"
@@ -436,6 +440,42 @@ TREATMENT_DEBUG_XML_ROWS = os.getenv("TREATMENT_DEBUG_XML_ROWS", "0") == "1"
 TREATMENT_DEBUG_XML_ROW_LIMIT = int(os.getenv("TREATMENT_DEBUG_XML_ROW_LIMIT", "5"))
 
 
+def get_treatment_log_path(job_id: str) -> Path:
+    safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "_", job_id or "sem_job_id")
+    return TEMP_TREATMENT_LOG_DIR / f"{safe_job_id}.jsonl"
+
+
+def compact_log_value_treatment(value, max_text_length=500):
+    if isinstance(value, dict):
+        return {str(k): compact_log_value_treatment(v, max_text_length) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [compact_log_value_treatment(v, max_text_length) for v in value]
+    if isinstance(value, str):
+        if len(value) > max_text_length:
+            return value[:max_text_length] + "...[truncated]"
+        return value
+    return value
+
+
+def write_treatment_log(job_id: str | None, event: str, **fields):
+    if not job_id:
+        return
+
+    payload = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "job_id": job_id,
+        "event": event,
+    }
+    payload.update({k: compact_log_value_treatment(v) for k, v in fields.items()})
+    line = json.dumps(payload, ensure_ascii=False, default=str)
+
+    with TREATMENT_LOG_LOCK:
+        with get_treatment_log_path(job_id).open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+    print(f"[treatment-log][job_id={job_id}][{event}] {line}", flush=True)
+
+
 def cleanup_old_treatment_jobs(max_age_seconds: int = 3600):
     now = time.time()
     to_delete = []
@@ -467,7 +507,7 @@ def cleanup_old_treatment_jobs(max_age_seconds: int = 3600):
                 TREATMENT_STATUS.pop(job_id, None)
 
     for meta in status_delete:
-        for key in ("input_path",):
+        for key in ("input_path", "log_path"):
             try:
                 path = meta.get(key)
                 if path:
@@ -508,6 +548,7 @@ def create_treatment_status(job_id: str, kind: str, filename: str, input_path: P
             "updated_at": now,
             "filename": filename,
             "input_path": str(input_path),
+            "log_path": str(get_treatment_log_path(job_id)),
             "progress": {
                 "phase": "upload_received",
                 "message": "Upload conclu\u00eddo. Preparando processamento...",
@@ -784,7 +825,22 @@ def sample_row_iter_treatment(row_iter, limit):
     return sampled_rows, itertools.chain(sampled_rows, iterator)
 
 
-def log_rows_sample_treatment(label, sampled_rows):
+def log_rows_sample_treatment(label, sampled_rows, job_id=None):
+    if job_id:
+        write_treatment_log(
+            job_id,
+            "rows_sample",
+            label=label,
+            sample_count=len(sampled_rows),
+            rows=[
+                {
+                    "row_index": row_index,
+                    "len": len(row_values),
+                    "values": list(row_values[:10]),
+                }
+                for row_index, row_values in sampled_rows
+            ],
+        )
     if not TREATMENT_DEBUG_ROWS:
         return
     for row_index, row_values in sampled_rows:
@@ -796,7 +852,17 @@ def log_rows_sample_treatment(label, sampled_rows):
         )
 
 
-def log_header_debug_treatment(label, header_index, header_row, buffered_rows):
+def log_header_debug_treatment(label, header_index, header_row, buffered_rows, job_id=None):
+    if job_id:
+        write_treatment_log(
+            job_id,
+            "header_detected",
+            label=label,
+            header_index=header_index,
+            header_len=len(header_row),
+            header=list(header_row[:40]),
+            buffered_rows=len(buffered_rows),
+        )
     if not TREATMENT_DEBUG_ROWS:
         return
     print(
@@ -807,7 +873,18 @@ def log_header_debug_treatment(label, header_index, header_row, buffered_rows):
     )
 
 
-def log_xml_rows_debug_treatment(label, reader, sheet_path):
+def log_xml_rows_debug_treatment(label, reader, sheet_path, job_id=None):
+    if job_id:
+        try:
+            write_treatment_log(
+                job_id,
+                "xml_rows_sample",
+                label=label,
+                sheet_path=sheet_path,
+                rows=reader.debug_sheet_xml_rows(sheet_path, max_rows=TREATMENT_DEBUG_XML_ROW_LIMIT),
+            )
+        except Exception as exc:
+            write_treatment_log(job_id, "xml_rows_sample_error", label=label, error=str(exc))
     if not TREATMENT_DEBUG_XML_ROWS:
         return
     for row in reader.debug_sheet_xml_rows(sheet_path, max_rows=TREATMENT_DEBUG_XML_ROW_LIMIT):
@@ -1002,6 +1079,7 @@ def process_streaming_rows_treatment(
     progress_phase="processing_rows",
     progress_message="Tratando linhas da planilha...",
     debug_label="mensagens",
+    job_id=None,
 ):
     header_index, header_row, buffered_rows = resolve_header_from_row_iter_treatment(
         row_iter,
@@ -1009,7 +1087,7 @@ def process_streaming_rows_treatment(
     )
     if header_index < 0:
         raise ValueError("N\u00e3o foi poss\u00edvel localizar o cabe\u00e7alho.")
-    log_header_debug_treatment(debug_label, header_index, header_row, buffered_rows)
+    log_header_debug_treatment(debug_label, header_index, header_row, buffered_rows, job_id=job_id)
 
     stream_meta = build_stream_meta_from_header_row_treatment(header_row)
     headers = stream_meta["output_headers"]
@@ -1060,6 +1138,16 @@ def process_streaming_rows_treatment(
 
     if row_count == 0:
         raise ValueError("Nenhuma linha v\u00e1lida foi encontrada para tratamento.")
+
+    write_treatment_log(
+        job_id,
+        "rows_processed",
+        label=debug_label,
+        row_count=row_count,
+        total_estimate=total_estimate,
+        column_count=len(headers),
+        preview_count=len(preview_rows),
+    )
 
     return {
         "stream_meta": stream_meta,
@@ -1275,10 +1363,15 @@ def is_brake_activated_treatment(value):
 
 
 def find_header_by_aliases_treatment(headers, aliases):
-    aliases_norm = {normalize_key_treatment(alias) for alias in aliases}
+    header_by_key = {}
     for header in headers:
-        if normalize_key_treatment(header) in aliases_norm:
+        header_by_key.setdefault(normalize_key_treatment(header), header)
+
+    for alias in aliases:
+        header = header_by_key.get(normalize_key_treatment(alias))
+        if header:
             return header
+
     return None
 
 
@@ -1365,6 +1458,13 @@ def process_treatment_file_treatment(
     progress_cb=None,
 ):
     started_at = time.perf_counter()
+    write_treatment_log(
+        job_id,
+        "process_treatment_start",
+        filename=filename,
+        input_path=str(input_path),
+        input_size=input_path.stat().st_size if input_path.exists() else None,
+    )
     if progress_cb:
         progress_cb("parsing_container", "Lendo a estrutura do arquivo XLSX...")
 
@@ -1374,8 +1474,15 @@ def process_treatment_file_treatment(
     try:
         with StreamingXlsxWorkbook(output_path) as output_wb:
             with XlsxStreamReader(input_path) as reader:
-                reader.load_container()
+                container_meta = reader.load_container()
                 parse_completed_at = time.perf_counter()
+                write_treatment_log(
+                    job_id,
+                    "container_loaded",
+                    sheets=list(container_meta.get("sheet_path_by_name", {}).keys()),
+                    shared_strings_path=container_meta.get("shared_strings_path"),
+                    elapsed_seconds=round(parse_completed_at - started_at, 3),
+                )
 
                 sheet_name = reader.resolve_sheet_name(REQUIRED_TREATMENT_SHEET, normalize_key_treatment)
                 if not sheet_name:
@@ -1384,15 +1491,23 @@ def process_treatment_file_treatment(
 
                 sheet_path = reader.sheet_path_by_name[sheet_name]
                 total_rows_hint = reader.estimate_sheet_total_rows(sheet_path)
+                write_treatment_log(
+                    job_id,
+                    "sheet_resolved",
+                    label="mensagens",
+                    sheet_name=sheet_name,
+                    sheet_path=sheet_path,
+                    total_rows_hint=total_rows_hint,
+                )
                 if TREATMENT_DEBUG_ROWS:
                     print(
                         f"[treatment-debug][sheet][mensagens] "
                         f"sheet_name={sheet_name!r} sheet_path={sheet_path!r} total_rows_hint={total_rows_hint}",
                         flush=True,
                     )
-                log_xml_rows_debug_treatment("mensagens", reader, sheet_path)
+                log_xml_rows_debug_treatment("mensagens", reader, sheet_path, job_id=job_id)
                 sampled_rows, row_iter = sample_row_iter_treatment(reader.iter_rows(sheet_path), TREATMENT_DEBUG_ROW_SAMPLE_LIMIT)
-                log_rows_sample_treatment("mensagens", sampled_rows)
+                log_rows_sample_treatment("mensagens", sampled_rows, job_id=job_id)
                 output_ws = output_wb.create_sheet(title="Tratado")
                 if progress_cb:
                     progress_cb("processing_rows", "Tratando linhas da planilha...")
@@ -1405,6 +1520,7 @@ def process_treatment_file_treatment(
                     progress_phase="processing_rows",
                     progress_message="Tratando linhas da planilha...",
                     debug_label="mensagens",
+                    job_id=job_id,
                 )
                 shared_stats = reader.shared_strings_stats()
 
@@ -1416,7 +1532,13 @@ def process_treatment_file_treatment(
                 progress_cb("writing_output", "Finalizando arquivo para download...", current=row_count, total=row_count, total_is_estimate=False)
             output_wb.save()
             save_completed_at = time.perf_counter()
-    except Exception:
+    except Exception as exc:
+        write_treatment_log(
+            job_id,
+            "process_treatment_error",
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
         output_path.unlink(missing_ok=True)
         raise
 
@@ -1449,6 +1571,17 @@ def process_treatment_file_treatment(
         f"rows={row_count} rps={rows_per_second:.2f} rpm={rows_per_minute:.2f}",
         flush=True,
     )
+    write_treatment_log(
+        job_id,
+        "process_treatment_done",
+        export_name=export_name,
+        output_path=str(output_path),
+        row_count=row_count,
+        column_count=len(headers),
+        shared_strings=shared_stats,
+        total_seconds=round(total_seconds, 3),
+        rows_per_second=round(rows_per_second, 3),
+    )
 
     return {
         "ok": True,
@@ -1456,6 +1589,7 @@ def process_treatment_file_treatment(
         "original_file_name": filename,
         "export_file_name": export_name,
         "sheet_name": sheet_name,
+        "log_path": str(get_treatment_log_path(job_id)),
         "row_count": row_count,
         "column_count": len(headers),
         "preview_headers": headers,
@@ -1471,6 +1605,14 @@ def process_treatment_step1_treatment(
     progress_cb=None,
 ):
     started_at = time.perf_counter()
+    write_treatment_log(
+        job_id,
+        "process_treatment_step1_start",
+        filename=filename,
+        input_path=str(input_path),
+        input_size=input_path.stat().st_size if input_path.exists() else None,
+        config=config,
+    )
     if progress_cb:
         progress_cb("parsing_container", "Lendo a estrutura do arquivo XLSX...")
 
@@ -1480,8 +1622,15 @@ def process_treatment_step1_treatment(
     try:
         with StreamingXlsxWorkbook(output_path) as output_wb:
             with XlsxStreamReader(input_path) as reader:
-                reader.load_container()
+                container_meta = reader.load_container()
                 parse_completed_at = time.perf_counter()
+                write_treatment_log(
+                    job_id,
+                    "container_loaded",
+                    sheets=list(container_meta.get("sheet_path_by_name", {}).keys()),
+                    shared_strings_path=container_meta.get("shared_strings_path"),
+                    elapsed_seconds=round(parse_completed_at - started_at, 3),
+                )
 
                 target_sheet_name = reader.resolve_sheet_name(REQUIRED_TREATMENT_SHEET, normalize_key_treatment)
                 if not target_sheet_name:
@@ -1495,6 +1644,14 @@ def process_treatment_step1_treatment(
                 trips = []
                 if trips_sheet_name:
                     trips_path = reader.sheet_path_by_name[trips_sheet_name]
+                    write_treatment_log(
+                        job_id,
+                        "sheet_resolved",
+                        label="horas_de_motor",
+                        sheet_name=trips_sheet_name,
+                        sheet_path=trips_path,
+                        total_rows_hint=reader.estimate_sheet_total_rows(trips_path),
+                    )
                     trips_processed = process_trips_rows_treatment(
                         reader.iter_rows(trips_path),
                         reader.estimate_sheet_total_rows(trips_path),
@@ -1505,6 +1662,16 @@ def process_treatment_step1_treatment(
                 trips_completed_at = time.perf_counter()
 
                 sheet_path = reader.sheet_path_by_name[target_sheet_name]
+                write_treatment_log(
+                    job_id,
+                    "sheet_resolved",
+                    label="mensagens-step1",
+                    sheet_name=target_sheet_name,
+                    sheet_path=sheet_path,
+                    total_rows_hint=reader.estimate_sheet_total_rows(sheet_path),
+                    trips_sheet_name=trips_sheet_name,
+                    trips_count=len(trips),
+                )
                 if TREATMENT_DEBUG_ROWS:
                     print(
                         f"[treatment-debug][sheet][mensagens-step1] "
@@ -1512,16 +1679,16 @@ def process_treatment_step1_treatment(
                         f"total_rows_hint={reader.estimate_sheet_total_rows(sheet_path)}",
                         flush=True,
                     )
-                log_xml_rows_debug_treatment("mensagens-step1", reader, sheet_path)
+                log_xml_rows_debug_treatment("mensagens-step1", reader, sheet_path, job_id=job_id)
                 sampled_rows, row_iter = sample_row_iter_treatment(reader.iter_rows(sheet_path), TREATMENT_DEBUG_ROW_SAMPLE_LIMIT)
-                log_rows_sample_treatment("mensagens-step1", sampled_rows)
+                log_rows_sample_treatment("mensagens-step1", sampled_rows, job_id=job_id)
                 header_index, header_row, buffered_rows = resolve_header_from_row_iter_treatment(
                     row_iter,
                     preferred_keys={"hora"},
                 )
                 if header_index < 0:
                     raise ValueError("N\u00e3o foi poss\u00edvel localizar o cabe\u00e7alho.")
-                log_header_debug_treatment("mensagens-step1", header_index, header_row, buffered_rows)
+                log_header_debug_treatment("mensagens-step1", header_index, header_row, buffered_rows, job_id=job_id)
 
                 stream_meta = build_stream_meta_from_header_row_treatment(header_row)
                 treated_headers = stream_meta["output_headers"]
@@ -1537,6 +1704,18 @@ def process_treatment_step1_treatment(
                 accel_idx = resolve_header_index_treatment(treated_headers, ["Acelerador"])
                 brake_idx = resolve_header_index_treatment(treated_headers, ["Freio"])
                 prepare_completed_at = time.perf_counter()
+                write_treatment_log(
+                    job_id,
+                    "analysis_columns_resolved",
+                    hour_idx=hour_idx,
+                    hour_unix_idx=hour_unix_idx,
+                    rpm_idx=rpm_idx,
+                    speed_idx=speed_idx,
+                    accel_idx=accel_idx,
+                    brake_idx=brake_idx,
+                    treated_header_count=len(treated_headers),
+                    analysis_header_count=len(analysis_headers),
+                )
 
                 recent_brake_events = deque()
                 previous_brake_active = False
@@ -1630,6 +1809,16 @@ def process_treatment_step1_treatment(
                 for row_index, row_values in row_iter:
                     consume_main_row(row_index, row_values)
                 shared_stats = reader.shared_strings_stats()
+                write_treatment_log(
+                    job_id,
+                    "rows_processed",
+                    label="mensagens-step1",
+                    row_count=row_count,
+                    total_estimate=total_estimate,
+                    column_count=len(analysis_headers),
+                    preview_count=len(preview_rows),
+                    trips_count=len(trips),
+                )
 
             process_completed_at = time.perf_counter()
             if row_count == 0:
@@ -1639,7 +1828,13 @@ def process_treatment_step1_treatment(
                 progress_cb("writing_output", "Finalizando arquivo para download...", current=row_count, total=row_count, total_is_estimate=False)
             output_wb.save()
             save_completed_at = time.perf_counter()
-    except Exception:
+    except Exception as exc:
+        write_treatment_log(
+            job_id,
+            "process_treatment_step1_error",
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
         output_path.unlink(missing_ok=True)
         raise
 
@@ -1674,6 +1869,18 @@ def process_treatment_step1_treatment(
         f"rows={row_count} rps={rows_per_second:.2f} rpm={rows_per_minute:.2f} trips_count={len(trips)}",
         flush=True,
     )
+    write_treatment_log(
+        job_id,
+        "process_treatment_step1_done",
+        export_name=export_name,
+        output_path=str(output_path),
+        row_count=row_count,
+        column_count=len(analysis_headers),
+        trips_count=len(trips),
+        shared_strings=shared_stats,
+        total_seconds=round(total_seconds, 3),
+        rows_per_second=round(rows_per_second, 3),
+    )
 
     return {
         "ok": True,
@@ -1681,6 +1888,7 @@ def process_treatment_step1_treatment(
         "original_file_name": filename,
         "export_file_name": export_name,
         "sheet_name": target_sheet_name,
+        "log_path": str(get_treatment_log_path(job_id)),
         "trips_count": len(trips),
         "row_count": row_count,
         "column_count": len(analysis_headers),
@@ -1691,6 +1899,15 @@ def process_treatment_step1_treatment(
 
 def run_treatment_job(job_id: str, temp_input_path: Path, filename: str):
     def progress_cb(phase, message, current=None, total=None, total_is_estimate=None):
+        write_treatment_log(
+            job_id,
+            "progress",
+            phase=phase,
+            message=message,
+            current=current,
+            total=total,
+            total_is_estimate=total_is_estimate,
+        )
         update_treatment_progress(
             job_id,
             phase,
@@ -1702,6 +1919,7 @@ def run_treatment_job(job_id: str, temp_input_path: Path, filename: str):
         )
 
     try:
+        write_treatment_log(job_id, "worker_start", kind="base", filename=filename, input_path=str(temp_input_path))
         update_treatment_progress(job_id, "parsing_container", "Lendo a estrutura do arquivo XLSX...", status="processing")
         result = process_treatment_file_treatment(
             filename,
@@ -1722,7 +1940,13 @@ def run_treatment_job(job_id: str, temp_input_path: Path, filename: str):
                 "total": None,
             },
         )
+        write_treatment_log(job_id, "worker_done", kind="base", result_summary={
+            "row_count": result.get("row_count"),
+            "column_count": result.get("column_count"),
+            "export_file_name": result.get("export_file_name"),
+        })
     except Exception as e:
+        write_treatment_log(job_id, "worker_error", kind="base", error=str(e), traceback=traceback.format_exc())
         update_treatment_status(
             job_id,
             status="error",
@@ -1744,6 +1968,15 @@ def run_treatment_job(job_id: str, temp_input_path: Path, filename: str):
 
 def run_treatment_step1_job(job_id: str, temp_input_path: Path, filename: str, config: dict):
     def progress_cb(phase, message, current=None, total=None, total_is_estimate=None):
+        write_treatment_log(
+            job_id,
+            "progress",
+            phase=phase,
+            message=message,
+            current=current,
+            total=total,
+            total_is_estimate=total_is_estimate,
+        )
         update_treatment_progress(
             job_id,
             phase,
@@ -1755,6 +1988,7 @@ def run_treatment_step1_job(job_id: str, temp_input_path: Path, filename: str, c
         )
 
     try:
+        write_treatment_log(job_id, "worker_start", kind="step1", filename=filename, input_path=str(temp_input_path), config=config)
         update_treatment_progress(job_id, "parsing_container", "Lendo a estrutura do arquivo XLSX...", status="processing")
         result = process_treatment_step1_treatment(
             filename,
@@ -1776,7 +2010,14 @@ def run_treatment_step1_job(job_id: str, temp_input_path: Path, filename: str, c
                 "total": None,
             },
         )
+        write_treatment_log(job_id, "worker_done", kind="step1", result_summary={
+            "row_count": result.get("row_count"),
+            "column_count": result.get("column_count"),
+            "trips_count": result.get("trips_count"),
+            "export_file_name": result.get("export_file_name"),
+        })
     except Exception as e:
+        write_treatment_log(job_id, "worker_error", kind="step1", error=str(e), traceback=traceback.format_exc())
         update_treatment_status(
             job_id,
             status="error",
@@ -2694,9 +2935,24 @@ class Handler(BaseHTTPRequestHandler):
                     "progress": status.get("progress"),
                     "result": status.get("result"),
                     "error": status.get("error"),
+                    "log_path": status.get("log_path"),
                 },
                 200,
             )
+            return
+
+        if path == "/treatment_log":
+            job_id = (qs.get("job_id") or [""])[0].strip()
+            if not job_id:
+                self._send_json({"ok": False, "error": "missing job_id"}, 400)
+                return
+
+            log_path = get_treatment_log_path(job_id)
+            if not log_path.exists() or not log_path.is_file():
+                self._send_json({"ok": False, "error": "log_not_found"}, 404)
+                return
+
+            self._send_file_stream(log_path, "application/x-ndjson; charset=utf-8", 200)
             return
 
         if path == "/download_treatment_result":
@@ -2752,6 +3008,16 @@ class Handler(BaseHTTPRequestHandler):
 
                 job_id = uuid.uuid4().hex
                 input_path = save_treatment_input_file(raw_body, filename, job_id)
+                write_treatment_log(
+                    job_id,
+                    "upload_received",
+                    path=path,
+                    filename=filename,
+                    input_path=str(input_path),
+                    bytes_received=len(raw_body),
+                    content_type=self.headers.get("Content-Type"),
+                    user_agent=self.headers.get("User-Agent"),
+                )
 
                 if path == "/process_treatment":
                     create_treatment_status(job_id, "base", filename, input_path)
@@ -2776,6 +3042,7 @@ class Handler(BaseHTTPRequestHandler):
                         "brakeIntenseMin": float(config.get("brakeIntenseMin", 4)),
                     }
                     create_treatment_status(job_id, "step1", filename, input_path)
+                    write_treatment_log(job_id, "analysis_config_resolved", config=config)
                     worker = threading.Thread(
                         target=run_treatment_step1_job,
                         args=(job_id, input_path, filename, config),
